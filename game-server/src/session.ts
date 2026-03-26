@@ -35,8 +35,6 @@ export async function createSession(
   // Game server self-signs this tx
   tx.setSender(SPONSOR_ADDRESS);
 
-  const txBytes = await tx.build({ client: suiClient });
-
   // Sign and submit (Gasless relay)
   const bytes = await tx.build({ client: suiClient });
   const { signature } = await sponsorKeypair.signTransaction(bytes);

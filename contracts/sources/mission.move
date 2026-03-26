@@ -63,7 +63,11 @@ module onerealm::mission {
         tier:      u8,
         loot_type: u8
     ) {
-        assert!(session.status == STATUS_PENDING, EInvalidStatus);
+        // Cho phép gọi nhiều lần — chỉ block khi đã COMPLETE/FAILED
+        assert!(
+            session.status != STATUS_COMPLETE && session.status != STATUS_FAILED,
+            EInvalidStatus
+        );
         session.loot_tiers.push_back(tier);
         session.loot_types.push_back(loot_type);
         session.status = STATUS_LOOT_DONE;
