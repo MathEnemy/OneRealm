@@ -4,7 +4,7 @@
 // Show all Equipment objects player owns + current Hero slots
 
 import { useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/router';
 import { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { getStoredSession } from '../auth/zklogin';
@@ -41,8 +41,7 @@ interface EquipmentItem {
 
 export default function InventoryPage() {
   const router       = useRouter();
-  const searchParams = useSearchParams();
-  const heroId       = searchParams.get('heroId') ?? '';
+  const heroId       = (router.query.heroId as string) || '';
 
   const [address, setAddress]     = useState<string | null>(null);
   const [items, setItems]         = useState<EquipmentItem[]>([]);
@@ -52,11 +51,12 @@ export default function InventoryPage() {
   const [feedback, setFeedback]   = useState('');
 
   useEffect(() => {
+    if (!router.isReady) return;
     const session = getStoredSession();
     if (!session.address) { router.push('/'); return; }
     setAddress(session.address);
-    loadInventory(session.address);
-  }, []);
+    if (heroId) loadInventory(session.address);
+  }, [router.isReady, heroId]);
 
   async function loadInventory(addr: string) {
     setLoading(true);

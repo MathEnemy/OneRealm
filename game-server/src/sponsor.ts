@@ -12,11 +12,14 @@ import { suiClient, sponsorKeypair } from './sui-client';
 const RATE_LIMIT_PER_DAY = 10;
 const rateLimitMap = new Map<string, number>();
 
-// Reset rate limits at midnight
-setInterval(() => {
-  rateLimitMap.clear();
-  console.log('[sponsor] Rate limit counters reset');
-}, getMillisToMidnight());
+function scheduleReset() {
+  setTimeout(() => {
+    rateLimitMap.clear();
+    console.log('[sponsor] Rate limit counters reset');
+    scheduleReset();
+  }, getMillisToMidnight());
+}
+scheduleReset();
 
 function getMillisToMidnight(): number {
   const now = new Date();

@@ -3,7 +3,7 @@
 // BLUEPRINT.md: Hero card + equipment slots + Mint button (gasless) + AI hint panel
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter } from 'next/router';
 import { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { getStoredSession } from '../auth/zklogin';

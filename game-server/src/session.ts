@@ -60,3 +60,24 @@ export async function createSession(
 
   return { sessionId, createTxDigest: result.digest };
 }
+
+export async function generateLoot(sessionId: string, senderAddress: string): Promise<string> {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${PACKAGE_ID}::loot::generate_loot`,
+    arguments: [tx.object('0x8'), tx.object(sessionId)],
+  });
+  tx.setSender(SPONSOR_ADDRESS);
+  const bytes = await tx.build({ client: suiClient });
+  const { signature } = await sponsorKeypair.signTransaction(bytes);
+  const result = await suiClient.executeTransactionBlock({
+    transactionBlock: bytes,
+    signature,
+    options: { showEffects: true },
+  });
+  if (result.effects?.status.status !== 'success') {
+    throw new Error('Tx1 failed: ' + result.effects?.status.error);
+  }
+  console.log(`[loot] Generated loot for session ${sessionId} (Tx1: ${result.digest})`);
+  return result.digest;
+}

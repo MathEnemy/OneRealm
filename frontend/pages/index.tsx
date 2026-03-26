@@ -3,7 +3,7 @@
 // Phase [2.1] — BLUEPRINT.md: zkLogin flow + OAuth callback handler
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter } from 'next/router';
 import { startLogin, completeLogin, getStoredSession } from '../auth/zklogin';
 
 export default function LoginPage() {

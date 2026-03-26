@@ -7,7 +7,7 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { handleSponsor } from './sponsor';
-import { createSession } from './session';
+import { createSession, generateLoot } from './session';
 import { buildBattleTx } from './battle';
 import { getAiHint } from './ai-hint';
 
@@ -71,6 +71,26 @@ app.post('/api/session/create', async (req: Request, res: Response, next: NextFu
     }
     const result = await createSession(heroId, playerAddress, missionType as 0 | 1);
     return res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ================================================================
+// POST /api/session/loot — Generate Loot (Tx1 for E-01 fix)
+// ================================================================
+// INPUT:  { sessionId: string, playerAddress: string }
+// OUTPUT: { tx1Digest: string }
+// Game Server self-signs and submits Tx1 as session owner
+// ================================================================
+app.post('/api/session/loot', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { sessionId, playerAddress } = req.body;
+    if (!sessionId || !playerAddress) {
+      return res.status(400).json({ error: 'Missing sessionId or playerAddress' });
+    }
+    const digest = await generateLoot(sessionId, playerAddress);
+    return res.json({ tx1Digest: digest });
   } catch (err) {
     next(err);
   }

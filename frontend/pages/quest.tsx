@@ -5,7 +5,7 @@
 // ADR-006: Game Server builds Tx2, Frontend co-signs and submits
 
 import { useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/router';
 import { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { getStoredSession } from '../auth/zklogin';
@@ -38,8 +38,7 @@ interface QuestResult {
 
 export default function QuestPage() {
   const router       = useRouter();
-  const searchParams = useSearchParams();
-  const heroId       = searchParams.get('heroId') ?? '';
+  const heroId       = (router.query.heroId as string) || '';
 
   const [address, setAddress]       = useState<string | null>(null);
   const [missionType, setMissionType] = useState<0 | 1>(0); // 0=FOREST, 1=DUNGEON
@@ -50,11 +49,12 @@ export default function QuestPage() {
   const [tx1Digest, setTx1Digest]   = useState('');
 
   useEffect(() => {
+    if (!router.isReady) return;
     const session = getStoredSession();
     if (!session.address) { router.push('/'); return; }
     setAddress(session.address);
     if (!heroId) { router.push('/hero'); }
-  }, []);
+  }, [router.isReady, heroId]);
 
   // ============================================================
   // Tx1: Create MissionSession + generate_loot (entry fun — ADR-002)
@@ -77,23 +77,16 @@ export default function QuestPage() {
       const { sessionId: newSessionId, createTxDigest } = await createRes.json();
       setSessionId(newSessionId);
 
-      // Step 2: Build Tx1 — entry loot::generate_loot(Random, MissionSession)
-      // CRITICAL (ADR-002): This is a STANDALONE transaction — CANNOT chain after Random MoveCall
-      const tx1 = new Transaction();
-      tx1.moveCall({
-        target: `${PACKAGE_ID}::loot::generate_loot`,
-        arguments: [
-          tx1.object(RANDOM_OBJECT_ID),   // sui::random::Random (always "0x8")
-          tx1.object(newSessionId),        // MissionSession (owned by game server)
-        ],
+      // E-01 FIX: Game Server submits Tx1 instead of Player (owned object limits)
+      const lootRes = await fetch(`${SERVER_URL}/api/session/loot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: newSessionId, playerAddress: address }),
       });
-      tx1.setSender(address);
-
-      const tx1Bytes = Buffer.from(await tx1.build({ client: suiClient })).toString('base64');
-
-      // Step 3: Execute Tx1 gaslessly (WOW #2)
-      const tx1Result = await executeGasless(tx1Bytes, address);
-      setTx1Digest(tx1Result.digest);
+      if (!lootRes.ok) throw new Error('Failed to generate loot via server');
+      const { tx1Digest } = await lootRes.json();
+      
+      setTx1Digest(tx1Digest);
       setStep('tx1-done');
 
       // Step 4: Auto-proceed to Tx2 after short reveal delay
