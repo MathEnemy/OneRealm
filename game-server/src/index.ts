@@ -7,11 +7,11 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { handleSponsor } from './sponsor';
-import { createSession, generateLoot, grantJudgeBundle, verifySessionOwnership } from './session';
+import { createSession, generateLoot, grantJudgeBundle, verifySessionOwnership, verifyHeroOwnership } from './session';
 import { buildBattleTx } from './battle';
 import { getAiHint } from './ai-hint';
 import { createAuthSession, createDemoAuthSession, requireAuth } from './auth';
-import { checkDailyLimit, consumeDailyLimit, getDailyCount } from './rate-limit';
+import { consumeDailyLimitOrThrow, RateLimitBucket } from './rate-limit';
 import { verifySponsoredTransaction } from './tx-policy';
 import { CHAIN_DOCS_URL, CHAIN_FLAVOR, CHAIN_LABEL, CHAIN_NETWORK, CHAIN_RPC_URL, ONEBOX_URL } from './chain';
 
@@ -112,9 +112,16 @@ app.use('/api/session', requireAuth);
 app.use('/api/battle', requireAuth);
 app.use('/api/demo', requireAuth);
 
-function consumeQuotaOrThrow(address: string) {
-  checkDailyLimit(address);
-  consumeDailyLimit(address);
+function consumeBucketOrThrow(address: string, bucket: RateLimitBucket) {
+  consumeDailyLimitOrThrow(address, bucket);
+}
+
+function sendKnownError(err: any, res: Response): boolean {
+  if (!err?.status) {
+    return false;
+  }
+  res.status(err.status).json({ error: err.error ?? err.message, details: err.details });
+  return true;
 }
 
 // ================================================================
@@ -122,7 +129,7 @@ function consumeQuotaOrThrow(address: string) {
 // ================================================================
 // INPUT:  { txBytes: string } + Authorization: Bearer <sessionToken>
 // OUTPUT: { sponsoredTxBytes: string, sponsorSig: string }
-//       | { error: "Rate limited" }   HTTP 429
+//       | { error: "Rate limited", details: { bucket, count_today, limit, remaining, resetsAt } }   HTTP 429
 //       | { error: "Unauthorized" }   HTTP 401
 // ================================================================
 app.post('/api/sponsor', async (req: Request, res: Response, next: NextFunction) => {
@@ -135,14 +142,13 @@ app.post('/api/sponsor', async (req: Request, res: Response, next: NextFunction)
     }
 
     verifySponsoredTransaction(txBytes, authSession.address);
-    consumeQuotaOrThrow(authSession.address);
+    consumeBucketOrThrow(authSession.address, 'sponsor_action');
 
     const result = await handleSponsor(txBytes);
     return res.json(result);
   } catch (err: any) {
-    // Rate limit throws { status: 429, error: ... }
-    if (err.status) {
-      return res.status(err.status).json({ error: err.error, details: err.details });
+    if (sendKnownError(err, res)) {
+      return;
     }
     next(err);
   }
@@ -162,7 +168,10 @@ app.post('/api/session/create', async (req: Request, res: Response, next: NextFu
     if (!heroId || missionType === undefined || contractType === undefined || stance === undefined) {
       return res.status(400).json({ error: 'Missing heroId, missionType, contractType, or stance' });
     }
-    consumeQuotaOrThrow(authSession.address);
+    
+    await verifyHeroOwnership(heroId, authSession.address);
+
+    consumeBucketOrThrow(authSession.address, 'quest_start');
     const result = await createSession(
       heroId,
       authSession.address,
@@ -171,7 +180,10 @@ app.post('/api/session/create', async (req: Request, res: Response, next: NextFu
       stance as 0 | 1 | 2,
     );
     return res.json(result);
-  } catch (err) {
+  } catch (err: any) {
+    if (sendKnownError(err, res)) {
+      return;
+    }
     next(err);
   }
 });
@@ -191,10 +203,13 @@ app.post('/api/session/loot', async (req: Request, res: Response, next: NextFunc
       return res.status(400).json({ error: 'Missing sessionId' });
     }
     await verifySessionOwnership(sessionId, authSession.address);
-    consumeQuotaOrThrow(authSession.address);
+    consumeBucketOrThrow(authSession.address, 'server_action');
     const digest = await generateLoot(sessionId);
     return res.json({ tx1Digest: digest });
-  } catch (err) {
+  } catch (err: any) {
+    if (sendKnownError(err, res)) {
+      return;
+    }
     next(err);
   }
 });
@@ -216,7 +231,10 @@ app.post('/api/battle', async (req: Request, res: Response, next: NextFunction) 
 
     const txBytes = await buildBattleTx(sessionId, authSession.address);
     return res.json({ txBytes });
-  } catch (err) {
+  } catch (err: any) {
+    if (sendKnownError(err, res)) {
+      return;
+    }
     next(err);
   }
 });
@@ -229,7 +247,10 @@ app.post('/api/demo/bootstrap', async (req: Request, res: Response, next: NextFu
     const authSession = req.authSession!;
     const txDigest = await grantJudgeBundle(authSession.address);
     return res.json({ txDigest });
-  } catch (err) {
+  } catch (err: any) {
+    if (sendKnownError(err, res)) {
+      return;
+    }
     next(err);
   }
 });

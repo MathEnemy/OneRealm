@@ -27,7 +27,58 @@ export function getE2eRuntime(): OneRealmE2ERuntime | null {
   if (typeof window === 'undefined') {
     return null;
   }
-  return window.__ONEREALM_E2E__ ?? null;
+  if (window.__ONEREALM_E2E__) {
+    return window.__ONEREALM_E2E__;
+  }
+  
+  if (sessionStorage.getItem('demoAuth') === 'true') {
+    return {
+      executeGasless: async (txBytes: string, address: string) => {
+        const SERVER_URL = process.env.NEXT_PUBLIC_GAME_SERVER_URL ?? 'http://localhost:3001';
+        const sponsorRes = await fetch(`${SERVER_URL}/api/sponsor`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${sessionStorage.getItem('apiSessionToken')}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ txBytes }),
+        });
+        if (!sponsorRes.ok) {
+           const errBody = await sponsorRes.json().catch(()=>({}));
+           throw new Error(errBody.error || 'Sponsor failed in demo mode');
+        }
+        const { sponsoredTxBytes, sponsorSig } = await sponsorRes.json();
+        
+        const { SuiClient } = await import('@onelabs/sui/client');
+        const client = new SuiClient({ url: process.env.NEXT_PUBLIC_SUI_RPC_URL ?? 'https://rpc-testnet.onelabs.cc:443' });
+        const result = await client.executeTransactionBlock({
+          transactionBlock: sponsoredTxBytes,
+          signature: sponsorSig,
+          options: { showEffects: true, showEvents: true, showObjectChanges: true },
+        });
+        return { digest: result.digest, effects: result.effects, objectChanges: result.objectChanges };
+      },
+      buildBattleTxAndExecute: async function(sessionId: string, address: string) {
+        const SERVER_URL = process.env.NEXT_PUBLIC_GAME_SERVER_URL ?? 'http://localhost:3001';
+        const battleRes = await fetch(`${SERVER_URL}/api/battle`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${sessionStorage.getItem('apiSessionToken')}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ sessionId }),
+        });
+        if (!battleRes.ok) {
+           const errBody = await battleRes.json().catch(()=>({}));
+           throw new Error(errBody.error || 'Battle build failed in demo mode');
+        }
+        const { txBytes } = await battleRes.json();
+        return this.executeGasless!(txBytes, address);
+      }
+    };
+  }
+
+  return null;
 }
 
 export async function e2eFetch(input: string, init?: RequestInit): Promise<Response> {
@@ -71,6 +122,9 @@ export async function getDynamicFields(client: SuiClient, args: any) {
 }
 
 export function encodeE2eTx(action: unknown): string | null {
+  if (typeof window !== 'undefined' && sessionStorage.getItem('demoAuth') === 'true') {
+    return null;
+  }
   if (!getE2eRuntime()) {
     return null;
   }

@@ -137,6 +137,27 @@ export async function verifySessionOwnership(sessionId: string, playerAddress: s
   }
 }
 
+export async function verifyHeroOwnership(heroId: string, playerAddress: string): Promise<void> {
+  const heroObject = await withRpcRetry('verifyHero:getObject', () => suiClient.getObject({
+    id: heroId,
+    options: { showContent: true, showOwner: true },
+  }));
+
+  if (heroObject.error) {
+    throw Object.assign(new Error(`Failed to fetch hero: ${heroObject.error.code}`), { status: 404 });
+  }
+
+  const content = heroObject.data?.content as any;
+  if (!content || content.type !== `${PACKAGE_ID}::hero::Hero`) {
+    throw Object.assign(new Error('Object is not a Hero'), { status: 400 });
+  }
+
+  const owner = heroObject.data?.owner as any;
+  if (!owner || !owner.AddressOwner || normalizeSuiAddress(owner.AddressOwner) !== normalizeSuiAddress(playerAddress)) {
+    throw Object.assign(new Error('Hero does not belong to authenticated player'), { status: 401 });
+  }
+}
+
 export async function generateLoot(sessionId: string): Promise<string> {
   const tx = new Transaction();
   tx.moveCall({

@@ -1,17 +1,19 @@
-// pages/index.tsx — Login Screen (WOW #1: Google → OneChain address)
-// Phase [2.1] — BLUEPRINT.md: Google + zk proof auth flow + OAuth callback handler
-
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import Link from 'next/link';
 import { startLogin, completeLogin, getStoredSession, startDemoLogin } from '../auth/zklogin';
 import { CHAIN_LABEL } from '../lib/chain';
+import { Button } from '../components/ui/Button';
+import { Card } from '../components/ui/Card';
+import { Banner } from '../components/ui/Feedback';
+import { StatePanel } from '../components/ui/StatePanel';
 
 const JUDGE_MODE = process.env.NEXT_PUBLIC_JUDGE_MODE === 'true';
 
 export default function LoginPage() {
   const router = useRouter();
   const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [loadingPhase, setLoadingPhase] = useState<'google' | 'proof' | 'server'>('google');
   const [errorMsg, setErrorMsg] = useState('');
 
   // Check for OAuth callback (id_token in URL hash)
@@ -34,11 +36,13 @@ export default function LoginPage() {
 
   async function handleCallback(jwt: string) {
     setStatus('loading');
+    setLoadingPhase('proof');
     try {
       const { address } = await completeLogin(jwt);
       console.log('[login] Derived address:', address);
       // Clean URL (remove id_token from hash)
       window.history.replaceState({}, '', window.location.pathname);
+      setLoadingPhase('server');
       router.push('/hero');
     } catch (err: any) {
       setStatus('error');
@@ -48,6 +52,7 @@ export default function LoginPage() {
 
   async function handleLogin() {
     setStatus('loading');
+    setLoadingPhase('google');
     setErrorMsg('');
     try {
       await startLogin();
@@ -59,6 +64,7 @@ export default function LoginPage() {
 
   async function handleJudgeMode() {
     setStatus('loading');
+    setLoadingPhase('google');
     setErrorMsg('');
     try {
       await startDemoLogin();
@@ -70,134 +76,90 @@ export default function LoginPage() {
   }
 
   return (
-    <main style={styles.container}>
-      <div style={styles.card}>
+    <main className="container flex-center" style={{ minHeight: '100vh', position: 'relative' }}>
+      {/* Subtle radial glow */}
+      <div style={{
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        width: '600px',
+        height: '600px',
+        background: 'radial-gradient(circle, rgba(102, 126, 234, 0.15) 0%, rgba(0,0,0,0) 70%)',
+        zIndex: 0,
+        pointerEvents: 'none'
+      }} />
+
+      <Card style={{ maxWidth: 440, width: '100%', textAlign: 'center', padding: 'var(--space-6) var(--space-5)', position: 'relative', zIndex: 1 }}>
         {/* Logo & Title */}
-        <div style={styles.logo}>⚔️</div>
-        <h1 style={styles.title}>OneRealm</h1>
-        <p style={styles.subtitle}>GameFi fantasy economy on {CHAIN_LABEL}. Play with Google. Own your loot.</p>
+        <div style={{ fontSize: 64, marginBottom: 'var(--space-3)' }}>⚔️</div>
+        <h1 style={{ marginBottom: 'var(--space-2)' }}>OneRealm</h1>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-6)' }}>
+          GameFi fantasy economy on {CHAIN_LABEL}. Play with Google. Own your loot.
+        </p>
 
         {/* Auth states */}
         {status === 'idle' && (
-          <>
-            <button onClick={handleLogin} style={styles.googleBtn}>
-              <span style={{ marginRight: 10 }}>🔑</span>
-              Login with Google
-            </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+            <Button variant="primary" fullWidth onClick={handleLogin} style={{ padding: 'var(--space-4)' }}>
+              <span style={{ marginRight: 'var(--space-2)' }}>🔑</span> Login with Google
+            </Button>
             {JUDGE_MODE && (
-              <button onClick={handleJudgeMode} style={styles.demoBtn}>
-                <span style={{ marginRight: 10 }}>⚡</span>
-                Enter Judge Mode
-              </button>
+              <Button fullWidth onClick={handleJudgeMode} style={{ padding: 'var(--space-4)' }}>
+                <span style={{ marginRight: 'var(--space-2)' }}>⚡</span> Enter Judge Mode
+              </Button>
             )}
-          </>
+          </div>
         )}
 
         {status === 'loading' && (
-          <div style={styles.loadingBox}>
-            <div style={styles.spinner} />
-            <p style={styles.loadingText}>
-              {window?.location?.hash?.includes('id_token')
-                ? 'Generating ZK proof...'
-                : 'Connecting to Google...'}
-            </p>
-            <p style={styles.loadingSubtext}>This takes 2-5 seconds</p>
-          </div>
+          <StatePanel
+            loading
+            tone="info"
+            eyebrow="Secure Login"
+            title={
+              loadingPhase === 'google'
+                ? 'Connecting to Google…'
+                : loadingPhase === 'proof'
+                  ? 'Generating ZK proof…'
+                  : 'Authenticating…'
+            }
+            description={loadingPhase === 'proof' ? 'This takes 2-5 seconds.' : 'Please wait…'}
+            style={{ marginTop: 'var(--space-2)' }}
+          />
         )}
 
         {status === 'error' && (
-          <div style={styles.errorBox}>
-            <p style={styles.errorText}>⚠️ {errorMsg}</p>
-            <button onClick={() => setStatus('idle')} style={styles.retryBtn}>
+          <div style={{ marginBottom: 'var(--space-4)' }}>
+            <Banner type="error">{errorMsg}</Banner>
+            <Button variant="secondary" onClick={() => setStatus('idle')} fullWidth style={{ marginTop: 'var(--space-3)' }}>
               Try again
-            </button>
+            </Button>
           </div>
         )}
 
-        {/* Features */}
-        <div style={styles.features}>
-          <div style={styles.feature}>
-            <span>🔐</span><span>Zero wallet setup — just Google</span>
+        {/* Features / Trust Strip */}
+        <div className="stat-block" style={{ marginTop: 'var(--space-6)', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', textAlign: 'left', background: 'transparent', padding: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', color: 'var(--text-secondary)', fontSize: 14 }}>
+            <span className="badge badge-info" style={{ width: 28, height: 28, justifyContent: 'center' }}>🔐</span> 
+            <span>Zero wallet setup — just Google</span>
           </div>
-          <div style={styles.feature}>
-            <span>⚡</span><span>Zero gas — we sponsor every tx</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', color: 'var(--text-secondary)', fontSize: 14 }}>
+            <span className="badge badge-info" style={{ width: 28, height: 28, justifyContent: 'center' }}>⚡</span> 
+            <span>Zero gas — we sponsor every tx</span>
           </div>
-          <div style={styles.feature}>
-            <span>🏆</span><span>Equipment truly owned on-chain</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', color: 'var(--text-secondary)', fontSize: 14 }}>
+            <span className="badge badge-info" style={{ width: 28, height: 28, justifyContent: 'center' }}>🏆</span> 
+            <span>Equipment truly owned on-chain</span>
           </div>
         </div>
-        <Link href="/about" style={styles.aboutLink}>
-          Why this fits OneHack →
-        </Link>
-      </div>
+
+        <div style={{ marginTop: 'var(--space-6)' }}>
+          <Link href="/about" className="btn btn-ghost" style={{ fontWeight: 700 }}>
+            Why this fits OneHack →
+          </Link>
+        </div>
+      </Card>
     </main>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    minHeight: '100vh',
-    background: 'linear-gradient(135deg, #0f0c29, #302b63, #24243e)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontFamily: "'Inter', sans-serif",
-  },
-  card: {
-    background: 'rgba(255,255,255,0.05)',
-    backdropFilter: 'blur(20px)',
-    border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 24,
-    padding: '48px 40px',
-    maxWidth: 400,
-    width: '90%',
-    textAlign: 'center',
-    boxShadow: '0 25px 50px rgba(0,0,0,0.5)',
-  },
-  logo:  { fontSize: 64, marginBottom: 16 },
-  title: { fontSize: 36, fontWeight: 800, color: '#fff', margin: '0 0 8px' },
-  subtitle: { color: 'rgba(255,255,255,0.6)', fontSize: 15, marginBottom: 36, lineHeight: 1.5 },
-  googleBtn: {
-    width: '100%', padding: '16px 24px',
-    background: 'linear-gradient(135deg, #667eea, #764ba2)',
-    color: '#fff', border: 'none', borderRadius: 12,
-    fontSize: 16, fontWeight: 600, cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    transition: 'transform 0.2s',
-  },
-  demoBtn: {
-    width: '100%', padding: '16px 24px',
-    background: 'rgba(255,255,255,0.08)',
-    color: '#fff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 12,
-    fontSize: 16, fontWeight: 700, cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    transition: 'transform 0.2s', marginTop: 12,
-  },
-  loadingBox: { padding: '24px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 },
-  spinner: {
-    width: 40, height: 40,
-    border: '3px solid rgba(255,255,255,0.2)',
-    borderTop: '3px solid #667eea',
-    borderRadius: '50%',
-    animation: 'spin 1s linear infinite',
-  },
-  loadingText:    { color: '#fff', fontWeight: 600, margin: 0 },
-  loadingSubtext: { color: 'rgba(255,255,255,0.5)', fontSize: 13, margin: 0 },
-  errorBox:  { background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 12, padding: 16, marginBottom: 16 },
-  errorText: { color: '#fca5a5', margin: '0 0 12px', fontSize: 14 },
-  retryBtn: {
-    background: 'rgba(255,255,255,0.1)', color: '#fff',
-    border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8,
-    padding: '8px 20px', cursor: 'pointer', fontSize: 14,
-  },
-  features: { marginTop: 36, display: 'flex', flexDirection: 'column', gap: 12 },
-  feature:  { display: 'flex', gap: 10, alignItems: 'center', color: 'rgba(255,255,255,0.6)', fontSize: 14 },
-  aboutLink: {
-    display: 'inline-block',
-    marginTop: 28,
-    color: '#c4b5fd',
-    fontSize: 14,
-    textDecoration: 'none',
-    fontWeight: 700,
-  },
-};

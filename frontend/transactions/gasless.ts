@@ -3,9 +3,10 @@
 // Flow: txBytes → POST /api/sponsor → zkSign → executeTransactionBlock([zkSig, sponsorSig])
 
 import { SuiClient } from '@onelabs/sui/client';
-import { buildZkSignature, getAuthHeaders, isDemoAuthSession } from '../auth/zklogin';
+import { buildZkSignature, getAuthHeaders } from '../auth/zklogin';
 import { e2eFetch, getE2eRuntime } from '../lib/e2e';
 import { CHAIN_RPC_URL } from '../lib/chain';
+import { getRateLimitMessage, readApiError, type RateLimitDetails } from '../lib/api-errors';
 
 const SERVER_URL   = process.env.NEXT_PUBLIC_GAME_SERVER_URL ?? 'http://localhost:3001';
 
@@ -46,27 +47,22 @@ export async function executeGasless(
   });
 
   if (!sponsorRes.ok) {
-    const errBody = await sponsorRes.json();
     // CONTRACTS.md error codes: 429=Rate limited, 401=Unauthorized
     if (sponsorRes.status === 429) {
-      throw new GaslessError('RATE_LIMITED', errBody.error);
+      const apiError = await readApiError(sponsorRes, 'Rate limited');
+      throw new GaslessError('RATE_LIMITED', getRateLimitMessage(apiError.details as RateLimitDetails), apiError.details as RateLimitDetails);
     }
     if (sponsorRes.status === 401) {
-      throw new GaslessError('UNAUTHORIZED', errBody.error);
+      const apiError = await readApiError(sponsorRes, 'Unauthorized');
+      throw new GaslessError('UNAUTHORIZED', apiError.message);
     }
-    throw new GaslessError('SPONSOR_FAILED', errBody.error ?? 'Unknown sponsor error');
+    const apiError = await readApiError(sponsorRes, 'Unknown sponsor error');
+    throw new GaslessError('SPONSOR_FAILED', apiError.message, apiError.details as RateLimitDetails | undefined);
   }
 
   const { sponsoredTxBytes, sponsorSig } = await sponsorRes.json();
 
-  if (isDemoAuthSession()) {
-    const result = await suiClient.executeTransactionBlock({
-      transactionBlock: sponsoredTxBytes,
-      signature: sponsorSig,
-      options: { showEffects: true, showEvents: true, showObjectChanges: true },
-    });
-    return { digest: result.digest, effects: result.effects, objectChanges: result.objectChanges };
-  }
+
 
   // Step 2: Build zkLogin signature
   const zkSig = await buildZkSignature(sponsoredTxBytes);
@@ -117,7 +113,8 @@ export async function buildBattleTxAndExecute(
 export class GaslessError extends Error {
   constructor(
     public readonly code: 'RATE_LIMITED' | 'UNAUTHORIZED' | 'SPONSOR_FAILED' | 'BATTLE_BUILD_FAILED',
-    message: string
+    message: string,
+    public readonly details?: RateLimitDetails
   ) {
     super(message);
     this.name = 'GaslessError';

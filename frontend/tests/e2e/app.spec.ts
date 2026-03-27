@@ -349,7 +349,7 @@ test('login -> mint -> quest -> craft -> expedition return', async ({ page }) =>
   await scholarFocus.getByRole('button', { name: 'Craft' }).click();
   await expect(page.getByText(/Crafted new gear/i)).toBeVisible();
 
-  await page.getByRole('button', { name: /Back/i }).click();
+  await page.getByRole('link', { name: /Back/i }).click();
   await expect(page.getByText(/Rank Adept/i)).toBeVisible();
 
   await page.getByRole('button', { name: /Start Quest/i }).click();

@@ -20,10 +20,19 @@ export async function buildBattleTx(
     options: { showContent: true },
   });
 
-  const fields = sessionObject.data?.content && 'fields' in sessionObject.data.content
+  if (sessionObject.error || !sessionObject.data) {
+    throw Object.assign(new Error('Session not found'), { status: 404 });
+  }
+
+  const fields = sessionObject.data.content && 'fields' in sessionObject.data.content
     ? (sessionObject.data.content as any).fields
     : {};
+  
   const sessionPlayer = normalizeSuiAddress(fields.player ?? '');
+  if (sessionPlayer !== normalizeSuiAddress(playerAddress)) {
+    throw Object.assign(new Error('Session does not belong to authenticated player'), { status: 401 });
+  }
+
   const rawHeroId = fields.hero_id;
   const heroId = typeof rawHeroId === 'object' && rawHeroId !== null && 'id' in rawHeroId 
     ? rawHeroId.id 

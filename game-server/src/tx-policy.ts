@@ -17,11 +17,15 @@ export function verifySponsoredTransaction(txBytes: string, expectedSender: stri
     throw { status: 400, error: 'Transaction payload too large' };
   }
 
+  if (typeof txBytes !== 'string') {
+    throw { status: 400, error: 'Transaction payload must be a string' };
+  }
+
   let txData;
   try {
     txData = fromBase64(txBytes);
   } catch {
-    txData = txBytes;
+    throw { status: 400, error: 'Transaction payload must be valid base64' };
   }
   const tx = Transaction.from(txData);
   const data = tx.getData();

@@ -8,23 +8,34 @@ import { Transaction } from '@onelabs/sui/transactions';
 import { getStoredSession } from '../auth/zklogin';
 import { executeGasless, GaslessError } from '../transactions/gasless';
 import { encodeE2eTx, e2eFetch, getDynamicFields, getE2eRuntime, getObject, getOwnedObjects } from '../lib/e2e';
+import { getRateLimitMessage } from '../lib/api-errors';
 import { CHAIN_LABEL, CHAIN_RPC_URL, ONEPREDICT_URL } from '../lib/chain';
+import { Button } from '../components/ui/Button';
+import { Card, Badge } from '../components/ui/Card';
+import { Banner, Spinner } from '../components/ui/Feedback';
+import { PageHeader } from '../components/layout/PageHeader';
+import { ChoiceCard } from '../components/ui/ChoiceCard';
+import { Section } from '../components/ui/Section';
+import { StatePanel } from '../components/ui/StatePanel';
 
 const PACKAGE_ID   = process.env.NEXT_PUBLIC_ONEREALM_PACKAGE_ID!;
 const SERVER_URL   = process.env.NEXT_PUBLIC_GAME_SERVER_URL ?? 'http://localhost:3001';
 const SPONSOR_ADDRESS = process.env.NEXT_PUBLIC_SPONSOR_ADDRESS;
 const JUDGE_MODE = process.env.NEXT_PUBLIC_JUDGE_MODE === 'true';
+
 const ARCHETYPES = [
   { id: 0 as const, name: 'Warrior', icon: '🛡️', affinity: 'Raid affinity' },
   { id: 1 as const, name: 'Ranger', icon: '🌿', affinity: 'Harvest affinity' },
   { id: 2 as const, name: 'Arcanist', icon: '✨', affinity: 'Training affinity' },
 ];
+
 const PROFESSIONS = [
   { id: 0 as const, name: 'Mining', icon: '⛏️', perk: 'Bonus ore on Harvest wins' },
   { id: 1 as const, name: 'Foraging', icon: '🌾', perk: 'Bonus scrap on Harvest wins' },
   { id: 2 as const, name: 'Smithing', icon: '🛠️', perk: 'Bonus essence on Training wins' },
   { id: 3 as const, name: 'Relic Hunting', icon: '🗝️', perk: 'Bonus essence on Raid wins' },
 ];
+
 const PROFESSION_RANK_LABEL: Record<number, string> = {
   0: 'Novice',
   1: 'Adept',
@@ -54,24 +65,30 @@ interface AiHint {
 }
 
 function decodeBytes(value: any): string {
-  if (typeof value === 'string') {
-    return Buffer.from(value, 'base64').toString();
-  }
-  if (Array.isArray(value)) {
-    return Buffer.from(value).toString();
-  }
+  if (typeof value === 'string') return Buffer.from(value, 'base64').toString();
+  if (Array.isArray(value)) return Buffer.from(value).toString();
   return 'Unknown';
 }
 
 function dynamicFieldName(field: any): string {
   const value = field?.name?.value;
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return Buffer.from(value).toString();
-  }
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return Buffer.from(value).toString();
   return '';
+}
+
+function getArchetype(id: number) {
+  return ARCHETYPES.find((e) => e.id === id) ?? ARCHETYPES[0];
+}
+
+function getProfession(id: number) {
+  return PROFESSIONS.find((e) => e.id === id) ?? PROFESSIONS[0];
+}
+
+function getProfessionRank(xp: number) {
+  if (xp >= 7) return 2;
+  if (xp >= 3) return 1;
+  return 0;
 }
 
 async function loadEquipmentState(heroId: string) {
@@ -82,32 +99,17 @@ async function loadEquipmentState(heroId: string) {
 
   for (const field of dynamicFields.data) {
     const slot = dynamicFieldName(field);
-    if (!field.objectId) {
-      continue;
-    }
+    if (!field.objectId) continue;
 
-    const itemObject = await getObject(suiClient, {
-      id: field.objectId,
-      options: { showContent: true },
-    });
-    const itemFields = itemObject.data?.content && 'fields' in itemObject.data.content
-      ? (itemObject.data.content as any).fields
-      : {};
+    const itemObject = await getObject(suiClient, { id: field.objectId, options: { showContent: true } });
+    const itemFields = itemObject.data?.content && 'fields' in itemObject.data.content ? (itemObject.data.content as any).fields : {};
     totalBonus += Number(itemFields.power ?? 0);
 
-    if (slot === 'weapon') {
-      weaponEquipped = true;
-    }
-    if (slot === 'armor') {
-      armorEquipped = true;
-    }
+    if (slot === 'weapon') weaponEquipped = true;
+    if (slot === 'armor') armorEquipped = true;
   }
 
-  return {
-    armorEquipped,
-    totalBonus,
-    weaponEquipped,
-  };
+  return { armorEquipped, totalBonus, weaponEquipped };
 }
 
 export default function HeroPage() {
@@ -158,7 +160,6 @@ export default function HeroPage() {
       }));
       setHeroes(heroList);
 
-      // Fetch AI hint for first hero if any
       if (heroList.length > 0) {
         const equippedSlots = Number(heroList[0].weaponEquipped) + Number(heroList[0].armorEquipped);
         fetchAiHint(heroList[0].totalPower, equippedSlots);
@@ -177,7 +178,7 @@ export default function HeroPage() {
         body: JSON.stringify({ heroPower, equippedSlots }),
       });
       setAiHint(await res.json());
-    } catch { /* silent fail — AI hint is non-critical */ }
+    } catch { /* silent */ }
   }
 
   async function handleMint() {
@@ -185,9 +186,7 @@ export default function HeroPage() {
     setMinting(true);
     setError('');
     try {
-      if (!SPONSOR_ADDRESS && !getE2eRuntime()) {
-        throw new Error('Missing NEXT_PUBLIC_SPONSOR_ADDRESS');
-      }
+      if (!SPONSOR_ADDRESS && !getE2eRuntime()) throw new Error('Missing NEXT_PUBLIC_SPONSOR_ADDRESS');
       const tx = new Transaction();
       tx.moveCall({
         target: `${PACKAGE_ID}::hero::mint_to_sender`,
@@ -208,7 +207,7 @@ export default function HeroPage() {
       await loadHeroes(address);
     } catch (e: any) {
       if (e instanceof GaslessError && e.code === 'RATE_LIMITED') {
-        setError('Daily quest limit reached (10/day). Try again tomorrow.');
+        setError(getRateLimitMessage(e.details));
       } else {
         setError('Mint failed: ' + e.message);
       }
@@ -216,267 +215,261 @@ export default function HeroPage() {
     setMinting(false);
   }
 
-  if (loading) return <LoadingScreen text="Loading heroes..." />;
-
-  return (
-    <main style={styles.container}>
-      <header style={styles.header}>
-        <h1 style={styles.title}>⚔️ OneRealm</h1>
-        <div style={styles.addressBadge}>
-          🔐 {address?.slice(0, 8)}...{address?.slice(-6)}
-        </div>
-      </header>
-      <div style={styles.runtimeBadge}>Built on {CHAIN_LABEL} • Gasless sessions • Move-owned assets</div>
-      {JUDGE_MODE && (
-        <div style={styles.judgeBanner}>Judge Mode live: claim the starter bundle in Inventory and resolve expeditions in about 30 seconds.</div>
-      )}
-
-      {/* AI Mentor Panel (ADR-011) */}
-      {aiHint && (
-        <div style={styles.aiPanel}>
-          <div style={styles.aiTitle}>🤖 AI Mentor <span style={styles.aiPowered}>OnePredict-ready strategy layer</span></div>
-          <div style={styles.readinessBar}>
-            <div style={{ ...styles.readinessFill, width: `${aiHint.readiness}%` }} />
-          </div>
-          <p style={styles.aiHint}>{aiHint.hint}</p>
-          <a href={ONEPREDICT_URL} target="_blank" rel="noreferrer" style={styles.aiLink}>
-            Explore OnePredict ecosystem →
-          </a>
+  const renderMintPanel = (isFirst: boolean) => (
+    <Card style={{ marginBottom: isFirst ? 32 : 0, display: 'flex', flexDirection: 'column', gap: isFirst ? 24 : 16 }}>
+      {isFirst && (
+        <div style={{ textAlign: 'center', marginBottom: 8, marginTop: 16 }}>
+           <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 8 }}>First, shape your hero.</h2>
+           <p style={{ color: 'var(--text-secondary)', fontSize: 16, maxWidth: 600, margin: '0 auto' }}>
+             Select an archetype to define combat affinity, and a profession for material bonuses. Both choices influence your optimal gameplay loop.
+           </p>
         </div>
       )}
-
-      {/* Mint new hero */}
-      <div style={styles.mintCard}>
-        <h2 style={styles.sectionTitle}>Create Hero</h2>
-        <div style={styles.mintRow}>
-          <input
-            style={styles.input}
-            placeholder="Hero name..."
-            value={heroName}
-            onChange={e => setHeroName(e.target.value)}
-            maxLength={32}
-          />
-          <button
-            style={{ ...styles.btn, opacity: minting || !heroName.trim() ? 0.5 : 1 }}
-            onClick={handleMint}
-            disabled={minting || !heroName.trim()}
-          >
-            {minting ? 'Minting...' : '✨ Mint (Free)'}
-          </button>
-        </div>
-        <div style={styles.archetypeRow}>
+      {!isFirst && <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Recruit Reserve Hero</h3>}
+      
+      <div>
+        <label htmlFor="hero-name" style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>Name your champion</label>
+        <input
+          id="hero-name"
+          name="hero_name"
+          className="input"
+          style={{ width: '100%', fontSize: isFirst ? 18 : 14, padding: isFirst ? 16 : 12 }}
+          placeholder="Hero name..."
+          value={heroName}
+          onChange={e => setHeroName(e.target.value)}
+          maxLength={32}
+          autoComplete="off"
+        />
+      </div>
+      
+      <div>
+        <div style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>Archetype (Combat Affinity)</div>
+        <div className="grid-responsive" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
           {ARCHETYPES.map((archetype) => (
-            <button
+            <ChoiceCard
               key={archetype.id}
-              style={{
-                ...styles.archetypeBtn,
-                ...(heroArchetype === archetype.id ? styles.archetypeBtnActive : {}),
-              }}
-              onClick={() => setHeroArchetype(archetype.id)}
+              onClick={() => !minting && setHeroArchetype(archetype.id)}
+              selected={heroArchetype === archetype.id}
+              tone="primary"
               disabled={minting}
+              style={{ padding: 12 }}
             >
-              <span style={styles.archetypeIcon}>{archetype.icon}</span>
-              <span>{archetype.name}</span>
-              <span style={styles.archetypeHint}>{archetype.affinity}</span>
-            </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15 }}>
+                <span style={{ fontSize: 18 }}>{archetype.icon}</span> {archetype.name}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                {heroArchetype === archetype.id ? 'Selected · ' : ''}
+                {archetype.affinity}
+              </div>
+            </ChoiceCard>
           ))}
         </div>
-        <div style={styles.professionRow}>
-          {PROFESSIONS.map((profession) => (
-            <button
-              key={profession.id}
-              style={{
-                ...styles.professionBtn,
-                ...(heroProfession === profession.id ? styles.professionBtnActive : {}),
-              }}
-              onClick={() => setHeroProfession(profession.id)}
-              disabled={minting}
-            >
-              <span style={styles.archetypeIcon}>{profession.icon}</span>
-              <span>{profession.name}</span>
-              <span style={styles.archetypeHint}>{profession.perk}</span>
-            </button>
-          ))}
-        </div>
-        {error && <p style={styles.error}>{error}</p>}
       </div>
 
-      {/* Hero list */}
-      {heroes.length === 0 ? (
-        <div style={styles.emptyState}>
-          <p>No heroes yet. Mint your first hero above!</p>
+      <div>
+        <div style={{ display: 'block', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>Profession (Loot Bonus)</div>
+        <div className="grid-responsive" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8 }}>
+          {PROFESSIONS.map((profession) => (
+            <ChoiceCard
+              key={profession.id}
+              onClick={() => !minting && setHeroProfession(profession.id)}
+              selected={heroProfession === profession.id}
+              tone="warning"
+              disabled={minting}
+              style={{ padding: 12 }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15 }}>
+                <span style={{ fontSize: 18 }}>{profession.icon}</span> {profession.name}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                {heroProfession === profession.id ? 'Selected · ' : ''}
+                {profession.perk}
+              </div>
+            </ChoiceCard>
+          ))}
+        </div>
+      </div>
+
+      {error && <Banner type="error">{error}</Banner>}
+
+      <Button variant={isFirst ? "primary" : "secondary"} fullWidth onClick={handleMint} disabled={minting || !heroName.trim()} style={{ padding: isFirst ? 20 : 16, fontSize: isFirst ? 18 : 14, fontWeight: 800 }}>
+        {minting ? 'Minting…' : '✨ Mint (Free)'}
+      </Button>
+    </Card>
+  );
+
+  if (loading) return (
+    <main className="container flex-center" style={{ minHeight: '60vh' }}>
+      <StatePanel
+        loading
+        tone="info"
+        eyebrow="Hero Roster"
+        title="Loading secure hero roster…"
+        description="Fetching hero objects, dynamic equipment fields, and mentor context."
+        style={{ maxWidth: 480, width: '100%' }}
+      />
+    </main>
+  );
+
+  const activeHero = heroes.length > 0 ? heroes[0] : null;
+  const rosterHeros = heroes.length > 1 ? heroes.slice(1) : [];
+
+  return (
+    <main className="container" style={{ paddingBottom: 'var(--space-8)' }}>
+      <PageHeader
+        icon="⚔️"
+        title={activeHero ? "Player Dashboard" : "Create Hero"}
+        subtitle={activeHero ? "Manage your active hero, consult your mentor, and deploy to missions." : "Your blockchain GameFi journey begins here."}
+        breadcrumb={[{ label: 'OneRealm' }, { label: 'Hero Roster' }]}
+      >
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <Badge variant="info">Built on {CHAIN_LABEL}</Badge>
+          <Badge>Gasless</Badge>
+          <Badge>Move-owned equipment</Badge>
+        </div>
+      </PageHeader>
+
+      {JUDGE_MODE && (
+        <Banner type="warning">
+          Judge Mode live: claim the starter bundle in Inventory and resolve expeditions in about 30 seconds.
+        </Banner>
+      )}
+
+      {!activeHero ? (
+        // --- 0 HEROES: LARGE MINT FLOW ---
+        <div style={{ maxWidth: 800, margin: '32px auto 0' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 24, fontSize: 64 }}>🎲</div>
+          {renderMintPanel(true)}
         </div>
       ) : (
-        <div style={styles.heroGrid}>
-          {heroes.map(hero => (
-            <div key={hero.id} style={styles.heroCard}>
-              <div style={styles.heroAvatar}>{getArchetype(hero.archetype).icon}</div>
-              <h3 style={styles.heroName}>{hero.name}</h3>
-              <div style={styles.heroArchetype}>{getArchetype(hero.archetype).name} • {getArchetype(hero.archetype).affinity}</div>
-              <div style={styles.heroProfession}>{getProfession(hero.profession).name} • {getProfession(hero.profession).perk}</div>
-              <div style={styles.heroProfessionMeta}>Rank {PROFESSION_RANK_LABEL[hero.professionRank]} • XP {hero.professionXp}</div>
-              <div style={styles.statRow}>
-                <span style={styles.stat}>⚡ Power: {hero.totalPower}</span>
-                <span style={styles.stat}>📊 Lv.{hero.level}</span>
-              </div>
-              <div style={styles.slots}>
-                <div style={styles.slot}>⚔️ {hero.weaponEquipped ? 'Weapon' : 'Empty'}</div>
-                <div style={styles.slot}>🛡 {hero.armorEquipped ? 'Armor' : 'Empty'}</div>
-              </div>
-              <div style={styles.heroActions}>
-                <button
-                  style={styles.questBtn}
-                  onClick={() => router.push(`/quest?heroId=${hero.id}`)}
-                >
-                  🗡 Start Quest
-                </button>
-                <button
-                  style={styles.invBtn}
-                  onClick={() => router.push(`/inventory?heroId=${hero.id}`)}
-                >
-                  🎒 Inventory
-                </button>
-              </div>
+        // --- DASHBOARD LAYOUT (2 COLUMNS) ---
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 32, marginTop: 24 }}>
+          
+          {/* LEFT COLUMN: ACTIVE HERO */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h2 className="section-heading" style={{ margin: 0, fontSize: 22 }}>Active Hero</h2>
+              <Badge variant="info" style={{ fontWeight: 800 }}>Lvl {activeHero.level}</Badge>
             </div>
-          ))}
+            
+            <Card style={{ padding: 0, overflow: 'hidden' }}>
+              {/* Character Header Plate */}
+              <div style={{ background: 'linear-gradient(to right, rgba(102,126,234,0.15), rgba(0,0,0,0))', padding: '32px 24px', display: 'flex', alignItems: 'center', gap: 20, borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <div style={{ fontSize: 64, filter: 'drop-shadow(0 0 20px rgba(102,126,234,0.4))' }}>
+                  {getArchetype(activeHero.archetype).icon}
+                </div>
+                <div>
+                  <h3 style={{ fontSize: 28, margin: '0 0 4px', fontWeight: 800 }}>{activeHero.name}</h3>
+                  <div style={{ color: 'var(--color-accent-primary)', fontWeight: 700, fontSize: 14 }}>
+                    {getArchetype(activeHero.archetype).name} • {getArchetype(activeHero.archetype).affinity}
+                  </div>
+                </div>
+              </div>
+              
+              {/* Stats Strip */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 1, background: 'rgba(255,255,255,0.05)' }}>
+                 <div className="stat-block" style={{ background: 'rgba(0,0,0,0.1)', borderRadius: 0, padding: 20 }}>
+                   <div className="stat-label" style={{ marginBottom: 4 }}>Total Power</div>
+                   <div className="stat-value" style={{ color: 'var(--color-accent-warning)', fontSize: 32, lineHeight: 1 }}>{activeHero.totalPower}</div>
+                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>Base {activeHero.basePower} + Gear {activeHero.totalPower - activeHero.basePower}</div>
+                 </div>
+                 <div className="stat-block" style={{ background: 'rgba(0,0,0,0.1)', borderRadius: 0, padding: 20 }}>
+                   <div className="stat-label" style={{ marginBottom: 4 }}>Profession</div>
+                   <div className="stat-value" style={{ fontSize: 20, display: 'flex', alignItems: 'center', gap: 8, lineHeight: 1.2, marginTop: 4 }}>
+                     {getProfession(activeHero.profession).icon} {getProfession(activeHero.profession).name}
+                   </div>
+                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>Rank {PROFESSION_RANK_LABEL[activeHero.professionRank]} • {activeHero.professionXp} XP</div>
+                 </div>
+              </div>
+              
+              {/* Equipment Status */}
+              <div style={{ padding: '24px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>Equipped Gear Overview</div>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                   <Badge variant={activeHero.weaponEquipped ? 'info' : 'warning'} style={{ padding: '8px 12px', fontSize: 13 }}>⚔️ {activeHero.weaponEquipped ? 'Weapon Active' : 'No Weapon'}</Badge>
+                   <Badge variant={activeHero.armorEquipped ? 'info' : 'warning'} style={{ padding: '8px 12px', fontSize: 13 }}>🛡 {activeHero.armorEquipped ? 'Armor Active' : 'No Armor'}</Badge>
+                </div>
+              </div>
+              
+              {/* Primary Actions */}
+              <div style={{ padding: 24, background: 'rgba(0,0,0,0.2)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                <Button variant="primary" style={{ flex: 1, minWidth: 200, padding: 16, fontSize: 16 }} onClick={() => router.push(`/quest?heroId=${activeHero.id}`)}>
+                  🗡 Start Quest
+                </Button>
+                <Button variant="secondary" style={{ flex: 1, minWidth: 140, padding: 16, fontSize: 16 }} onClick={() => router.push(`/inventory?heroId=${activeHero.id}`)}>
+                  🎒 Inventory
+                </Button>
+              </div>
+            </Card>
+          </div>
+          
+          {/* RIGHT COLUMN: MENTOR, ROSTER, & MINT */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            
+            {/* AI MENTOR PANEL */}
+            {aiHint ? (
+              <Card style={{ border: '1px solid rgba(16, 185, 129, 0.3)', background: 'linear-gradient(180deg, rgba(16,185,129,0.05) 0%, transparent 100%)' }}>
+                <div style={{ fontWeight: 800, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8, fontSize: 18, color: '#a7f3d0' }}>
+                  🤖 Advisory Panel
+                </div>
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 8, letterSpacing: 1 }}>
+                    <span>Combat Readiness</span>
+                    <span style={{ color: 'var(--color-accent-success)' }}>{aiHint.readiness}%</span>
+                  </div>
+                  <div style={{ height: 6, background: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', background: 'var(--color-accent-success)', borderRadius: 3, transition: 'width 0.5s ease', width: `${aiHint.readiness}%` }} />
+                  </div>
+                </div>
+                <p style={{ margin: '0 0 16px', fontSize: 14, lineHeight: 1.6, color: 'var(--text-primary)' }}>{aiHint.hint}</p>
+                
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, background: 'rgba(0,0,0,0.3)', padding: '10px 12px', borderRadius: 8 }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Recommendation:</span>
+                  <strong style={{ color: '#a7f3d0' }}>{aiHint.recommended_quest.toUpperCase()}</strong>
+                </div>
+                
+                <a href={ONEPREDICT_URL} target="_blank" rel="noreferrer" style={{ fontSize: 12, marginTop: 16, display: 'inline-block', color: 'var(--text-muted)', textDecoration: 'underline' }}>
+                  Powered by OnePredict ecosystem
+                </a>
+              </Card>
+            ) : (
+              <Card style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 20 }}>
+                <Spinner size={24} /> <span style={{ color: 'var(--text-secondary)', fontSize: 14 }}>Mentor analyzing loadout…</span>
+              </Card>
+            )}
+            
+            {/* HERO ROSTER */}
+            {rosterHeros.length > 0 && (
+              <Section title="Reserve Roster">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {rosterHeros.map(hero => (
+                    <Card key={hero.id} style={{ display: 'flex', gap: 16, alignItems: 'center', padding: '16px 20px', background: 'rgba(0,0,0,0.2)' }}>
+                       <div style={{ fontSize: 32 }}>{getArchetype(hero.archetype).icon}</div>
+                       <div style={{ flex: 1 }}>
+                         <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 4 }}>{hero.name}</div>
+                         <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                           Lvl {hero.level} • {getArchetype(hero.archetype).name} • Rank {PROFESSION_RANK_LABEL[hero.professionRank]}
+                         </div>
+                       </div>
+                       <div>
+                         <Button variant="ghost" onClick={() => router.push(`/quest?heroId=${hero.id}`)}>
+                           Select
+                         </Button>
+                       </div>
+                    </Card>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {/* MINT RESERVE PANEL */}
+            <div>
+              {renderMintPanel(false)}
+            </div>
+            
+          </div>
         </div>
       )}
     </main>
   );
 }
-
-function getArchetype(id: number) {
-  return ARCHETYPES.find((entry) => entry.id === id) ?? ARCHETYPES[0];
-}
-
-function getProfession(id: number) {
-  return PROFESSIONS.find((entry) => entry.id === id) ?? PROFESSIONS[0];
-}
-
-function getProfessionRank(xp: number) {
-  if (xp >= 7) return 2;
-  if (xp >= 3) return 1;
-  return 0;
-}
-
-function LoadingScreen({ text }: { text: string }) {
-  return (
-    <main style={{ ...baseContainer, alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ color: '#fff', fontSize: 18 }}>{text}</div>
-    </main>
-  );
-}
-
-const baseContainer: React.CSSProperties = {
-  minHeight: '100vh',
-  background: 'linear-gradient(135deg, #0f0c29, #302b63, #24243e)',
-  fontFamily: "'Inter', sans-serif",
-  color: '#fff',
-  padding: '24px 20px',
-};
-
-const styles: Record<string, React.CSSProperties> = {
-  container: { ...baseContainer },
-  header:    { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
-  title:     { fontSize: 24, fontWeight: 800, margin: 0 },
-  runtimeBadge: {
-    display: 'inline-flex',
-    alignSelf: 'flex-start',
-    background: 'rgba(96,165,250,0.14)',
-    border: '1px solid rgba(96,165,250,0.28)',
-    borderRadius: 999,
-    color: '#bfdbfe',
-    fontSize: 12,
-    fontWeight: 700,
-    marginBottom: 18,
-    padding: '8px 14px',
-  },
-  judgeBanner: {
-    background: 'rgba(245,158,11,0.14)',
-    border: '1px solid rgba(245,158,11,0.35)',
-    borderRadius: 14,
-    color: '#fde68a',
-    fontSize: 13,
-    fontWeight: 700,
-    marginBottom: 18,
-    padding: '10px 14px',
-  },
-  addressBadge: {
-    background: 'rgba(255,255,255,0.1)', borderRadius: 20,
-    padding: '6px 14px', fontSize: 13, color: 'rgba(255,255,255,0.7)',
-  },
-  aiPanel: {
-    background: 'rgba(102,126,234,0.15)', border: '1px solid rgba(102,126,234,0.3)',
-    borderRadius: 16, padding: '16px 20px', marginBottom: 24,
-  },
-  aiTitle:   { fontWeight: 700, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 },
-  aiPowered: { fontSize: 11, color: 'rgba(255,255,255,0.4)', fontWeight: 400 },
-  readinessBar: {
-    height: 6, background: 'rgba(255,255,255,0.1)', borderRadius: 3, marginBottom: 10, overflow: 'hidden',
-  },
-  readinessFill: { height: '100%', background: 'linear-gradient(90deg,#667eea,#764ba2)', borderRadius: 3, transition: 'width 0.5s' },
-  aiHint:    { margin: 0, fontSize: 14, color: 'rgba(255,255,255,0.8)' },
-  aiLink:    { color: '#9fe870', fontSize: 13, marginTop: 8, textDecoration: 'none' },
-  mintCard:  { background: 'rgba(255,255,255,0.05)', borderRadius: 16, padding: '20px', marginBottom: 24, border: '1px solid rgba(255,255,255,0.1)' },
-  sectionTitle: { fontSize: 16, fontWeight: 700, margin: '0 0 14px' },
-  mintRow:   { display: 'flex', gap: 10 },
-  archetypeRow: { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginTop: 12 },
-  professionRow: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10, marginTop: 10 },
-  archetypeBtn: {
-    display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4,
-    background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
-    borderRadius: 12, padding: '12px 14px', color: '#fff', cursor: 'pointer', textAlign: 'left',
-  },
-  archetypeBtnActive: {
-    background: 'rgba(59,130,246,0.22)', border: '1px solid rgba(96,165,250,0.45)',
-  },
-  professionBtn: {
-    display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4,
-    background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
-    borderRadius: 12, padding: '12px 14px', color: '#fff', cursor: 'pointer', textAlign: 'left',
-  },
-  professionBtnActive: {
-    background: 'rgba(245,158,11,0.18)', border: '1px solid rgba(251,191,36,0.45)',
-  },
-  archetypeIcon: { fontSize: 20 },
-  archetypeHint: { fontSize: 11, color: 'rgba(255,255,255,0.55)' },
-  input: {
-    flex: 1, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
-    borderRadius: 10, padding: '12px 16px', color: '#fff', fontSize: 15, outline: 'none',
-  },
-  btn: {
-    background: 'linear-gradient(135deg,#667eea,#764ba2)', color: '#fff',
-    border: 'none', borderRadius: 10, padding: '12px 20px',
-    fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' as const,
-  },
-  error:    { color: '#fca5a5', fontSize: 13, marginTop: 8 },
-  emptyState: { textAlign: 'center', color: 'rgba(255,255,255,0.4)', padding: '40px 20px' },
-  heroGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 },
-  heroCard: {
-    background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 16, padding: 20, display: 'flex', flexDirection: 'column', gap: 10,
-  },
-  heroAvatar:  { fontSize: 40, textAlign: 'center' },
-  heroName:    { margin: 0, fontSize: 18, fontWeight: 700, textAlign: 'center' },
-  heroArchetype: { textAlign: 'center', fontSize: 12, color: '#bfdbfe', fontWeight: 700 },
-  heroProfession: { textAlign: 'center', fontSize: 12, color: '#fcd34d', fontWeight: 700 },
-  heroProfessionMeta: { textAlign: 'center', fontSize: 12, color: 'rgba(255,255,255,0.58)' },
-  statRow:     { display: 'flex', justifyContent: 'space-around' },
-  stat:        { fontSize: 14, color: 'rgba(255,255,255,0.7)' },
-  slots:       { display: 'flex', gap: 8, justifyContent: 'center' },
-  slot: {
-    background: 'rgba(255,255,255,0.08)', borderRadius: 8,
-    padding: '6px 12px', fontSize: 13, color: 'rgba(255,255,255,0.6)',
-  },
-  heroActions: { display: 'flex', gap: 8, marginTop: 4 },
-  questBtn: {
-    flex: 1, background: 'linear-gradient(135deg,#667eea,#764ba2)',
-    color: '#fff', border: 'none', borderRadius: 10, padding: '10px 0',
-    fontWeight: 600, cursor: 'pointer',
-  },
-  invBtn: {
-    flex: 1, background: 'rgba(255,255,255,0.1)', color: '#fff',
-    border: '1px solid rgba(255,255,255,0.2)', borderRadius: 10,
-    padding: '10px 0', cursor: 'pointer',
-  },
-};

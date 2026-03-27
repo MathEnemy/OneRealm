@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import { completeLogin } from '../../auth/zklogin';
+import { Card } from '../../components/ui/Card';
+import { Spinner, Banner } from '../../components/ui/Feedback';
 
 export default function AuthCallbackPage() {
   const router = useRouter();
@@ -12,7 +14,7 @@ export default function AuthCallbackPage() {
     const idToken = params.get('id_token');
 
     if (!idToken) {
-      setError('Missing id_token from OAuth callback.');
+      setError('Missing `id_token` from OAuth callback. Return to login and try again.');
       return;
     }
 
@@ -22,44 +24,30 @@ export default function AuthCallbackPage() {
         router.replace('/hero');
       })
       .catch((err: any) => {
-        setError(err.message ?? 'Login finalization failed.');
+        setError(err.message ?? 'Login finalization failed. Return to login and try again.');
       });
-  }, []);
+  }, [router]);
 
   return (
-    <main style={styles.container}>
-      <div style={styles.card}>
-        <h1 style={styles.title}>Completing Login</h1>
-        {error
-          ? <p style={styles.error}>{error}</p>
-          : <p style={styles.text}>Generating zk proof and opening your authenticated session...</p>
-        }
-      </div>
+    <main className="container flex-center" style={{ minHeight: '100vh' }}>
+      <Card className="state-card" style={{ maxWidth: 460, width: '100%', textAlign: 'center' }}>
+        {error ? (
+          <>
+            <div className="state-eyebrow">Login Error</div>
+            <h1 className="state-title">Unable to complete login</h1>
+            <div style={{ marginTop: 16 }}>
+              <Banner type="error">{error}</Banner>
+            </div>
+          </>
+        ) : (
+          <div className="loading-state" role="status" aria-live="polite" style={{ padding: 0 }}>
+            <Spinner size={50} />
+            <div className="state-eyebrow">Securing Session</div>
+            <h1 className="state-title">Completing Login…</h1>
+            <p className="state-copy">Generating the zk proof and opening the authenticated session.</p>
+          </div>
+        )}
+      </Card>
     </main>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'linear-gradient(135deg, #0f0c29, #302b63, #24243e)',
-    color: '#fff',
-    fontFamily: "'Inter', sans-serif",
-    padding: 24,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 420,
-    borderRadius: 20,
-    padding: 28,
-    background: 'rgba(255,255,255,0.06)',
-    border: '1px solid rgba(255,255,255,0.1)',
-    textAlign: 'center',
-  },
-  title: { margin: '0 0 12px', fontSize: 24, fontWeight: 800 },
-  text: { margin: 0, color: 'rgba(255,255,255,0.75)' },
-  error: { margin: 0, color: '#fca5a5' },
-};

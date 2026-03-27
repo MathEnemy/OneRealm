@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { CHAIN_DOCS_URL, CHAIN_LABEL, CHAIN_RPC_URL, ONEBOX_URL, ONEPLAY_URL, ONEPREDICT_URL } from '../lib/chain';
+import { Card, Badge } from '../components/ui/Card';
+import { Section } from '../components/ui/Section';
 
 const cards = [
   {
@@ -35,183 +37,77 @@ const demoSteps = [
 
 export default function AboutPage() {
   return (
-    <main style={styles.page}>
-      <section style={styles.hero}>
-        <div style={styles.badge}>OneHack Submission Surface</div>
-        <h1 style={styles.title}>OneRealm on {CHAIN_LABEL}</h1>
-        <p style={styles.subtitle}>
-          A GameFi fantasy economy where players log in instantly, own on-chain gear, run gasless missions,
-          craft role-specific equipment, and return for asynchronous expeditions.
-        </p>
-        <div style={styles.ctaRow}>
-          <Link href="/" style={styles.primaryLink}>Play OneRealm</Link>
-          <a href={CHAIN_DOCS_URL} target="_blank" rel="noreferrer" style={styles.secondaryLink}>
+    <main className="container" style={{ padding: 'var(--space-6) var(--space-4)', maxWidth: 980, margin: '0 auto' }}>
+      <Section title={`OneRealm on ${CHAIN_LABEL}`} subtitle="A GameFi fantasy economy where players log in instantly, own on-chain gear, run gasless missions, craft role-specific equipment, and return for asynchronous expeditions.">
+        <Badge variant="info" style={{ marginBottom: 'var(--space-4)', display: 'inline-flex' }}>OneHack Submission Surface</Badge>
+        <div style={{ display: 'flex', gap: 'var(--space-4)', marginBottom: 'var(--space-6)', flexWrap: 'wrap' }}>
+          <Link href="/" className="btn btn-primary" style={{ padding: 'var(--space-3) var(--space-5)' }}>
+            Play OneRealm
+          </Link>
+          <a href={CHAIN_DOCS_URL} target="_blank" rel="noreferrer" className="btn btn-secondary" style={{ padding: 'var(--space-3) var(--space-5)' }}>
             OneChain Developer Docs
           </a>
         </div>
-        <div style={styles.metaBox}>
-          <div><strong>Track:</strong> GameFi</div>
-          <div><strong>Runtime:</strong> {CHAIN_LABEL}</div>
-          <div><strong>RPC:</strong> {CHAIN_RPC_URL}</div>
-          <div><strong>Toolkit:</strong> <a href={ONEBOX_URL} target="_blank" rel="noreferrer" style={styles.inlineLink}>ONEbox</a></div>
-        </div>
-      </section>
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>Backstory</h2>
-        <p style={styles.copy}>
+        <Card style={{ maxWidth: 780 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--space-4)' }}>
+            <div><span style={{ color: 'var(--text-muted)' }}>Track:</span> GameFi</div>
+            <div><span style={{ color: 'var(--text-muted)' }}>Runtime:</span> {CHAIN_LABEL}</div>
+            <div style={{ wordBreak: 'break-all' }}><span style={{ color: 'var(--text-muted)' }}>RPC:</span> {CHAIN_RPC_URL}</div>
+            <div><span style={{ color: 'var(--text-muted)' }}>Toolkit:</span> <a href={ONEBOX_URL} target="_blank" rel="noreferrer" style={{ color: 'var(--color-accent-primary)' }}>ONEbox</a></div>
+          </div>
+        </Card>
+      </Section>
+
+      <Section title="Product Promise">
+        <p style={{ fontSize: 16, lineHeight: 1.7, color: 'var(--text-secondary)', maxWidth: 780 }}>
           OneRealm is built around a simple player fantasy: hunt materials, discover rare recipes, shape a hero build,
           and keep coming back because each contract type changes risk, payout, and progression pacing.
         </p>
-      </section>
+      </Section>
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>OneChain Alignment</h2>
-        <div style={styles.grid}>
-          {cards.map((card) => (
-            <article key={card.title} style={styles.card}>
-              <h3 style={styles.cardTitle}>{card.title}</h3>
-              <p style={styles.cardBody}>{card.body}</p>
-              {card.href && card.cta && (
-                <a href={card.href} target="_blank" rel="noreferrer" style={styles.cardLink}>
-                  {card.cta} →
-                </a>
-              )}
-            </article>
+      <Section title="Gameplay Loop">
+        <div style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+          {['Login', 'Mint', 'Quest', 'Salvage', 'Craft', 'Expedition'].map((step, i) => (
+             <div key={step} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+               <Badge variant="info" style={{ width: 24, height: 24, justifyContent: 'center', borderRadius: '50%' }}>{i + 1}</Badge>
+               <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>{step}</span>
+               {i < 5 && <span style={{ color: 'var(--text-muted)' }}>→</span>}
+             </div>
           ))}
         </div>
-      </section>
+      </Section>
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>3-Minute Demo Flow</h2>
-        <ol style={styles.list}>
-          {demoSteps.map((step) => (
-            <li key={step} style={styles.listItem}>{step}</li>
+      <Section title="Technical Alignment">
+        <div className="grid-responsive" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))' }}>
+          {cards.map((card) => (
+            <Card key={card.title}>
+              <h3 style={{ fontSize: 18, fontWeight: 700, margin: '0 0 var(--space-3)' }}>{card.title}</h3>
+              <p style={{ fontSize: 14, lineHeight: 1.6, color: 'var(--text-secondary)', margin: '0 0 var(--space-4)' }}>{card.body}</p>
+              {card.href && card.cta && (
+                <a href={card.href} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-1)', color: 'var(--color-accent-primary)', fontWeight: 700, textDecoration: 'none', fontSize: 14 }}>
+                  {card.cta} <span className="badge badge-info" style={{ padding: '2px 4px', fontSize: 10 }}>↗</span>
+                </a>
+              )}
+            </Card>
           ))}
-        </ol>
-      </section>
+        </div>
+      </Section>
+
+      <Section title="Demo Flow">
+        <Card style={{ maxWidth: 780 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+            {demoSteps.map((step, index) => (
+              <div key={index} style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'flex-start' }}>
+                <Badge variant="info" style={{ flexShrink: 0, width: 28, height: 28, justifyContent: 'center', borderRadius: '50%' }}>
+                  {index + 1}
+                </Badge>
+                <div style={{ color: 'var(--text-secondary)', lineHeight: 1.6, marginTop: 2 }}>{step}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </Section>
     </main>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    background: 'radial-gradient(circle at top, #132344 0%, #08111f 48%, #040812 100%)',
-    color: '#f8fafc',
-    minHeight: '100vh',
-    padding: '56px 20px 80px',
-    fontFamily: '"Segoe UI", system-ui, sans-serif',
-  },
-  hero: {
-    margin: '0 auto 48px',
-    maxWidth: 980,
-  },
-  badge: {
-    background: 'rgba(96,165,250,0.16)',
-    border: '1px solid rgba(96,165,250,0.3)',
-    borderRadius: 999,
-    color: '#bfdbfe',
-    display: 'inline-block',
-    fontSize: 12,
-    fontWeight: 800,
-    letterSpacing: 0.4,
-    marginBottom: 18,
-    padding: '8px 14px',
-    textTransform: 'uppercase',
-  },
-  title: {
-    fontSize: 'clamp(36px, 6vw, 68px)',
-    lineHeight: 1.02,
-    margin: '0 0 18px',
-  },
-  subtitle: {
-    color: 'rgba(248,250,252,0.78)',
-    fontSize: 18,
-    lineHeight: 1.7,
-    margin: '0 0 22px',
-    maxWidth: 780,
-  },
-  ctaRow: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: 14,
-    marginBottom: 24,
-  },
-  primaryLink: {
-    background: '#9fe870',
-    borderRadius: 999,
-    color: '#08111f',
-    fontWeight: 800,
-    padding: '12px 18px',
-    textDecoration: 'none',
-  },
-  secondaryLink: {
-    border: '1px solid rgba(255,255,255,0.2)',
-    borderRadius: 999,
-    color: '#f8fafc',
-    fontWeight: 700,
-    padding: '12px 18px',
-    textDecoration: 'none',
-  },
-  inlineLink: {
-    color: '#9fe870',
-  },
-  metaBox: {
-    background: 'rgba(15,23,42,0.68)',
-    border: '1px solid rgba(148,163,184,0.18)',
-    borderRadius: 18,
-    display: 'grid',
-    gap: 10,
-    maxWidth: 780,
-    padding: 20,
-  },
-  section: {
-    margin: '0 auto 40px',
-    maxWidth: 980,
-  },
-  sectionTitle: {
-    fontSize: 28,
-    marginBottom: 16,
-  },
-  copy: {
-    color: 'rgba(248,250,252,0.8)',
-    fontSize: 17,
-    lineHeight: 1.7,
-  },
-  grid: {
-    display: 'grid',
-    gap: 18,
-    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-  },
-  card: {
-    background: 'rgba(15,23,42,0.7)',
-    border: '1px solid rgba(148,163,184,0.18)',
-    borderRadius: 18,
-    padding: 20,
-  },
-  cardTitle: {
-    fontSize: 20,
-    margin: '0 0 10px',
-  },
-  cardBody: {
-    color: 'rgba(248,250,252,0.76)',
-    lineHeight: 1.6,
-    margin: 0,
-  },
-  cardLink: {
-    color: '#9fe870',
-    display: 'inline-block',
-    fontWeight: 700,
-    marginTop: 16,
-    textDecoration: 'none',
-  },
-  list: {
-    margin: 0,
-    paddingLeft: 20,
-  },
-  listItem: {
-    color: 'rgba(248,250,252,0.82)',
-    lineHeight: 1.8,
-    marginBottom: 10,
-  },
-};

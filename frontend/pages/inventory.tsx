@@ -1,15 +1,18 @@
-// pages/inventory.tsx — Inventory Screen [2.4]
-// BLUEPRINT.md: Equipment grid + equip/unequip gaslessly
-// Show all Equipment objects player owns + current Hero slots
-
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/router';
 import { SuiClient } from '@onelabs/sui/client';
 import { Transaction } from '@onelabs/sui/transactions';
 import { getAuthHeaders, getStoredSession } from '../auth/zklogin';
 import { executeGasless, GaslessError } from '../transactions/gasless';
 import { e2eFetch, encodeE2eTx, getDynamicFields, getE2eRuntime, getObject, getOwnedObjects } from '../lib/e2e';
+import { getRateLimitMessage } from '../lib/api-errors';
 import { CHAIN_RPC_URL } from '../lib/chain';
+import { Button } from '../components/ui/Button';
+import { Card, Badge } from '../components/ui/Card';
+import { LoadingScreen, Banner } from '../components/ui/Feedback';
+import { PageHeader } from '../components/layout/PageHeader';
+import { EmptyState } from '../components/ui/DataDisplay';
+import { Section } from '../components/ui/Section';
 
 const PACKAGE_ID  = process.env.NEXT_PUBLIC_ONEREALM_PACKAGE_ID!;
 const SPONSOR_ADDRESS = process.env.NEXT_PUBLIC_SPONSOR_ADDRESS;
@@ -24,14 +27,14 @@ const SLOT_ARMOR  = 'armor';
 
 const RARITY_LABEL: Record<number, string> = { 0: 'Common', 1: 'Rare', 2: 'Legendary' };
 const RARITY_COLOR: Record<number, string> = {
-  0: 'rgba(156,163,175,0.3)',
-  1: 'rgba(59,130,246,0.3)',
-  2: 'rgba(234,179,8,0.3)',
+  0: 'rgba(156,163,175,0.2)',
+  1: 'rgba(59,130,246,0.2)',
+  2: 'rgba(234,179,8,0.2)',
 };
 const RARITY_BORDER: Record<number, string> = {
-  0: 'rgba(156,163,175,0.5)',
-  1: 'rgba(59,130,246,0.6)',
-  2: 'rgba(234,179,8,0.7)',
+  0: 'rgba(156,163,175,0.4)',
+  1: 'rgba(59,130,246,0.5)',
+  2: 'rgba(234,179,8,0.6)',
 };
 const AFFIX_LABEL: Record<number, string> = {
   0: 'Unaligned',
@@ -51,6 +54,19 @@ const PROFESSION_LABEL: Record<number, string> = {
   3: 'Relic Hunting',
 };
 
+const PROFESSIONS = [
+  { id: 0 as const, name: 'Mining', icon: '⛏️', perk: 'Bonus ore on Harvest wins' },
+  { id: 1 as const, name: 'Foraging', icon: '🌾', perk: 'Bonus scrap on Harvest wins' },
+  { id: 2 as const, name: 'Smithing', icon: '🛠️', perk: 'Bonus essence on Training wins' },
+  { id: 3 as const, name: 'Relic Hunting', icon: '🗝️', perk: 'Bonus essence on Raid wins' },
+];
+
+const PROFESSION_RANK_LABEL: Record<number, string> = {
+  0: 'Novice',
+  1: 'Adept',
+  2: 'Master',
+};
+
 interface RecipeDefinition {
   id: number;
   name: string;
@@ -63,6 +79,14 @@ interface RecipeDefinition {
 }
 
 const RECIPES: readonly RecipeDefinition[] = [
+  {
+    id: 2,
+    name: 'Scholar Focus',
+    description: '2 Essence + 1 Scrap',
+    affix: 'Scholar',
+    icon: '📘',
+    materialTypes: [2, 2, 1],
+  },
   {
     id: 0,
     name: 'Raider Blade',
@@ -78,14 +102,6 @@ const RECIPES: readonly RecipeDefinition[] = [
     affix: 'Forager',
     icon: '🛡',
     materialTypes: [1, 1, 0],
-  },
-  {
-    id: 2,
-    name: 'Scholar Focus',
-    description: '2 Essence + 1 Scrap',
-    affix: 'Scholar',
-    icon: '📘',
-    materialTypes: [2, 2, 1],
   },
   {
     id: 3,
@@ -271,6 +287,12 @@ export default function InventoryPage() {
   const [heroSlots, setHeroSlots] = useState<HeroSlotState>({ weapon: null, armor: null });
   const [heroProfile, setHeroProfile] = useState<HeroProfile>({ profession: null, professionXp: 0, professionRank: 0 });
 
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterType, setFilterType] = useState<'all' | 'weapon' | 'armor'>('all');
+  const [filterRarity, setFilterRarity] = useState<'all' | '0' | '1' | '2'>('all');
+  const [sortBy, setSortBy] = useState<'newest' | 'power' | 'rarity'>('power');
+  const [confirmSalvage, setConfirmSalvage] = useState<string | null>(null);
+
   useEffect(() => {
     if (!router.isReady) return;
     const session = getStoredSession();
@@ -395,7 +417,7 @@ export default function InventoryPage() {
       await loadInventory(address);
     } catch (e: any) {
       if (e instanceof GaslessError && e.code === 'RATE_LIMITED') {
-        setError('Daily action limit reached.');
+        setError(getRateLimitMessage(e.details));
       } else {
         setError('Equip failed: ' + e.message);
       }
@@ -431,7 +453,11 @@ export default function InventoryPage() {
       setFeedback(`✅ Unequipped successfully!`);
       await loadInventory(address);
     } catch (e: any) {
-      setError('Unequip failed: ' + e.message);
+      if (e instanceof GaslessError && e.code === 'RATE_LIMITED') {
+        setError(getRateLimitMessage(e.details));
+      } else {
+        setError('Unequip failed: ' + e.message);
+      }
     }
     setActing(null);
   }
@@ -458,9 +484,14 @@ export default function InventoryPage() {
       }) ?? Buffer.from(await tx.build({ client: suiClient })).toString('base64');
       await executeGasless(txBytes, address);
       setFeedback('♻️ Salvaged into crafting material.');
+      setConfirmSalvage(null);
       await loadInventory(address);
     } catch (e: any) {
-      setError('Salvage failed: ' + e.message);
+      if (e instanceof GaslessError && e.code === 'RATE_LIMITED') {
+        setError(getRateLimitMessage(e.details));
+      } else {
+        setError('Salvage failed: ' + e.message);
+      }
     }
     setActing(null);
   }
@@ -503,7 +534,11 @@ export default function InventoryPage() {
       setFeedback('🛠 Crafted new gear at the blacksmith.');
       await loadInventory(address);
     } catch (e: any) {
-      setError('Craft failed: ' + e.message);
+      if (e instanceof GaslessError && e.code === 'RATE_LIMITED') {
+        setError(getRateLimitMessage(e.details));
+      } else {
+        setError('Craft failed: ' + e.message);
+      }
     }
     setActing(null);
   }
@@ -530,291 +565,402 @@ export default function InventoryPage() {
     setActing(null);
   }
 
-  const weapons = items.filter(i => i.eqType === 0);
-  const armors  = items.filter(i => i.eqType === 1);
   const ores = materials.filter(m => m.materialType === 0);
   const scraps = materials.filter(m => m.materialType === 1);
   const essences = materials.filter(m => m.materialType === 2);
 
-  if (loading) {
-    return (
-      <main style={styles.container}>
-        <p style={{ textAlign: 'center', color: 'rgba(255,255,255,0.6)' }}>Loading inventory...</p>
-      </main>
-    );
-  }
+  const filteredArsenal = useMemo(() => {
+    return items.filter(item => {
+      if (filterType !== 'all') {
+        if (filterType === 'weapon' && item.eqType !== 0) return false;
+        if (filterType === 'armor' && item.eqType !== 1) return false;
+      }
+      if (filterRarity !== 'all' && item.rarity.toString() !== filterRarity) return false;
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        const matchesName = item.name.toLowerCase().includes(q);
+        const matchesAffix = AFFIX_LABEL[item.affix].toLowerCase().includes(q);
+        if (!matchesName && !matchesAffix) return false;
+      }
+      return true;
+    }).sort((a, b) => {
+      if (sortBy === 'power') return b.power - a.power;
+      if (sortBy === 'rarity') {
+        if (b.rarity !== a.rarity) return b.rarity - a.rarity;
+        return b.power - a.power;
+      }
+      return 0;
+    });
+  }, [items, filterType, filterRarity, searchQuery, sortBy]);
+
+  if (loading) return <LoadingScreen text="Loading tactical inventory..." />;
 
   return (
-    <main style={styles.container}>
-      <header style={styles.header}>
-        <button onClick={() => router.push(`/hero`)} style={styles.backBtn}>← Back</button>
-        <h1 style={styles.title}>🎒 Inventory</h1>
-        <div />
-      </header>
+    <main className="container" style={{ paddingBottom: 'var(--space-8)' }}>
+      <PageHeader
+        icon="🎒"
+        title="Inventory Manager"
+        subtitle="Review your loadout, salvage unused drops, and craft masterwork gear."
+        breadcrumb={[{ label: 'OneRealm' }, { label: 'Hero', href: '/hero' }, { label: 'Inventory' }]}
+        secondaryCTA={{ label: '← Back to Hero', href: '/hero', variant: 'ghost' }}
+      />
 
-      {/* Feedback / Error messages */}
-      {feedback && <div style={styles.feedbackBanner}>{feedback}</div>}
-      {error    && <div style={styles.errorBanner}>{error}</div>}
+      {feedback && <div style={{ marginBottom: 16 }}><Banner type="success">{feedback}</Banner></div>}
+      {error    && <div style={{ marginBottom: 16 }}><Banner type="error">{error}</Banner></div>}
 
       {JUDGE_MODE && (
-        <div style={styles.judgeCard}>
+        <Card style={{ marginBottom: 32, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
           <div>
-            <div style={styles.judgeTitle}>Judge Mode Bundle</div>
-            <div style={styles.judgeText}>Claim a starter pack of ore, scrap, and essence to demo crafting instantly.</div>
+            <div style={{ fontWeight: 800, marginBottom: 4 }}>Judge Mode Bundle</div>
+            <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Claim a starter pack of ore, scrap, and essence to demo crafting instantly.</div>
           </div>
-          <button
-            style={styles.judgeBtn}
-            onClick={claimJudgeBundle}
-            disabled={!!acting}
-          >
+          <Button variant="warning" onClick={claimJudgeBundle} disabled={!!acting} style={{ whiteSpace: 'nowrap' }}>
             {acting === 'judge-bundle' ? 'Claiming...' : 'Claim Bundle'}
-          </button>
-        </div>
+          </Button>
+        </Card>
       )}
 
+      {/* ZONE 1: ACTIVE LOADOUT */}
       {heroId && (
-        <div style={styles.heroSlots}>
-          <h2 style={styles.sectionTitle}>Hero Equipment Slots</h2>
-          <div style={styles.slotsRow}>
-            <div style={styles.slotCard}>
-              <div style={styles.slotIcon}>⚔️</div>
-              <div style={styles.slotLabel}>
-                {heroSlots.weapon ? `${heroSlots.weapon.name} (+${heroSlots.weapon.power}) • ${AFFIX_LABEL[heroSlots.weapon.affix]}` : 'Weapon Slot Empty'}
+        <Section title="Active Loadout">
+          <Card style={{ padding: '24px', background: 'var(--color-surface)', border: '1px solid rgba(255,255,255,0.05)' }}>
+            <div className="grid-responsive" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 32 }}>
+              
+              {/* Hero Status */}
+              <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+                 <div style={{ fontSize: 48, filter: 'drop-shadow(0 0 10px rgba(102,126,234,0.3))' }}>
+                   {heroProfile.profession !== null ? PROFESSIONS[heroProfile.profession].icon : '👤'}
+                 </div>
+                 <div>
+                   <div style={{ fontSize: 13, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: 1, marginBottom: 4 }}>Hero Profession</div>
+                   <div style={{ fontSize: 22, fontWeight: 800, lineHeight: 1.1 }}>
+                     {heroProfile.profession !== null ? PROFESSIONS[heroProfile.profession].name : 'Unassigned'}
+                   </div>
+                   <div style={{ fontSize: 13, color: 'var(--color-accent-warning)', fontWeight: 700, marginTop: 4 }}>
+                     Rank {PROFESSION_RANK_LABEL[heroProfile.professionRank]} • {heroProfile.professionXp} XP Drop Knowledge
+                   </div>
+                 </div>
               </div>
-              <button
-                style={styles.smallBtn}
-                onClick={() => handleUnequip(SLOT_WEAPON)}
-                disabled={!!acting || !heroSlots.weapon}
-              >
-                {acting === SLOT_WEAPON ? 'Unequipping...' : 'Unequip'}
-              </button>
+              
+              {/* Slots */}
+              <div style={{ display: 'flex', gap: 16, flex: 1, flexWrap: 'wrap' }}>
+                <div style={{ flex: 1, minWidth: 160, border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, padding: 16, background: 'rgba(0,0,0,0.2)', position: 'relative' }}>
+                  <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: 1, marginBottom: 12, fontWeight: 700 }}>Weapon Slot</div>
+                  {heroSlots.weapon ? (
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-primary)' }}>{heroSlots.weapon.name}</div>
+                      <div style={{ fontSize: 13, color: 'var(--color-accent-warning)', fontWeight: 700, margin: '6px 0' }}>+{heroSlots.weapon.power} ATK</div>
+                      <div style={{ fontSize: 11, color: 'var(--color-accent-primary)', fontWeight: 600 }}>{AFFIX_LABEL[heroSlots.weapon.affix]} Affix</div>
+                      
+                      <div style={{ marginTop: 16 }}>
+                        <Button variant="ghost" onClick={() => handleUnequip(SLOT_WEAPON)} disabled={!!acting || !heroSlots.weapon} style={{ padding: '6px 12px', fontSize: 12, width: '100%', borderColor: 'rgba(255,255,255,0.1)' }}>
+                          {acting === SLOT_WEAPON ? 'Unequipping...' : 'Unequip Weapon'}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', marginTop: 16 }}>Empty slot</div>}
+                  <div style={{ fontSize: 40, opacity: 0.05, position: 'absolute', right: 12, top: 12, pointerEvents: 'none' }}>⚔️</div>
+                </div>
+
+                <div style={{ flex: 1, minWidth: 160, border: '1px solid rgba(255,255,255,0.1)', borderRadius: 12, padding: 16, background: 'rgba(0,0,0,0.2)', position: 'relative' }}>
+                  <div style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text-secondary)', letterSpacing: 1, marginBottom: 12, fontWeight: 700 }}>Armor Slot</div>
+                  {heroSlots.armor ? (
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-primary)' }}>{heroSlots.armor.name}</div>
+                      <div style={{ fontSize: 13, color: 'var(--color-accent-warning)', fontWeight: 700, margin: '6px 0' }}>+{heroSlots.armor.power} DEF</div>
+                      <div style={{ fontSize: 11, color: 'var(--color-accent-primary)', fontWeight: 600 }}>{AFFIX_LABEL[heroSlots.armor.affix]} Affix</div>
+                      
+                      <div style={{ marginTop: 16 }}>
+                        <Button variant="ghost" onClick={() => handleUnequip(SLOT_ARMOR)} disabled={!!acting || !heroSlots.armor} style={{ padding: '6px 12px', fontSize: 12, width: '100%', borderColor: 'rgba(255,255,255,0.1)' }}>
+                          {acting === SLOT_ARMOR ? 'Unequipping...' : 'Unequip Armor'}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : <div style={{ fontSize: 13, color: 'var(--text-muted)', fontStyle: 'italic', marginTop: 16 }}>Empty slot</div>}
+                  <div style={{ fontSize: 40, opacity: 0.05, position: 'absolute', right: 12, top: 12, pointerEvents: 'none' }}>🛡</div>
+                </div>
+              </div>
+
             </div>
-            <div style={styles.slotCard}>
-              <div style={styles.slotIcon}>🛡</div>
-              <div style={styles.slotLabel}>
-                {heroSlots.armor ? `${heroSlots.armor.name} (+${heroSlots.armor.power}) • ${AFFIX_LABEL[heroSlots.armor.affix]}` : 'Armor Slot Empty'}
+          </Card>
+        </Section>
+      )}
+
+      {/* ZONE 2: THE ARSENAL */}
+      <Section title={`The Arsenal (${items.length})`}>
+        
+        {items.length === 0 ? (
+          <Card style={{ background: 'rgba(0,0,0,0.15)' }}>
+            <EmptyState
+              icon="⚔️"
+              message="Your armory is empty. Equipment drops from Harvest and Raid missions, so deploy your hero to start building a loadout."
+              action={
+                <Button variant="primary" onClick={() => router.push(`/quest?heroId=${heroId}`)}>
+                  Deploy on Mission
+                </Button>
+              }
+            />
+          </Card>
+        ) : (
+          <>
+            {/* Filter controls */}
+            <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', marginBottom: 24, background: 'rgba(0,0,0,0.2)', padding: '16px 20px', borderRadius: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <label htmlFor="arsenal-search" className="sr-only">Search gear</label>
+                <input
+                  id="arsenal-search"
+                  name="arsenal_search"
+                  className="input"
+                  placeholder="Search gear…"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  style={{ padding: '10px 14px' }}
+                  autoComplete="off"
+                />
               </div>
-              <button
-                style={styles.smallBtn}
-                onClick={() => handleUnequip(SLOT_ARMOR)}
-                disabled={!!acting || !heroSlots.armor}
-              >
-                {acting === SLOT_ARMOR ? 'Unequipping...' : 'Unequip'}
-              </button>
+              <div>
+                <label htmlFor="arsenal-type" className="sr-only">Filter by type</label>
+                <select id="arsenal-type" className="input" value={filterType} onChange={e => setFilterType(e.target.value as any)} style={{ padding: '10px 14px' }}>
+                  <option value="all">All Types</option>
+                  <option value="weapon">Weapons Only</option>
+                  <option value="armor">Armor Only</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="arsenal-rarity" className="sr-only">Filter by rarity</label>
+                <select id="arsenal-rarity" className="input" value={filterRarity} onChange={e => setFilterRarity(e.target.value as any)} style={{ padding: '10px 14px' }}>
+                  <option value="all">All Rarities</option>
+                  <option value="0">Common</option>
+                  <option value="1">Rare</option>
+                  <option value="2">Legendary</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="arsenal-sort" className="sr-only">Sort arsenal</label>
+                <select id="arsenal-sort" className="input" value={sortBy} onChange={e => setSortBy(e.target.value as any)} style={{ padding: '10px 14px' }}>
+                  <option value="newest">Sort: Default (Newest)</option>
+                  <option value="power">Sort: Power (High to Low)</option>
+                  <option value="rarity">Sort: Rarity</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid-responsive" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 16 }}>
+              {filteredArsenal.map(item => {
+                const isEquipped = heroSlots.weapon?.id === item.id || heroSlots.armor?.id === item.id;
+                
+                return (
+                  <ItemCard 
+                    key={item.id} 
+                    item={item} 
+                    isEquipped={isEquipped}
+                    actingStatus={
+                      acting === item.id ? 'Equipping...' :
+                      acting === `salvage:${item.id}` ? 'Salvaging...' :
+                      undefined
+                    }
+                    onEquip={() => handleEquip(item.id, item.eqType === 0 ? SLOT_WEAPON : SLOT_ARMOR)} 
+                    onSalvageClick={() => {
+                      if (confirmSalvage === item.id) {
+                        handleSalvage(item.id);
+                      } else {
+                        setConfirmSalvage(item.id);
+                      }
+                    }}
+                    onSalvageCancel={() => setConfirmSalvage(null)}
+                    needsSalvageConfirm={confirmSalvage === item.id}
+                    disabled={!!acting}
+                    showActions={!!heroId}
+                  />
+                );
+              })}
+            </div>
+            {filteredArsenal.length === 0 && (
+              <EmptyState
+                icon="🧭"
+                message="No equipment matches the current filters. Clear or adjust the search, type, rarity, or sorting controls."
+              />
+            )}
+          </>
+        )}
+      </Section>
+
+      {/* ZONE 3: RESOURCE CACHE */}
+      <Section title="Resource Cache">
+        {materials.length === 0 ? (
+          <EmptyState
+            icon="🧱"
+            message="No materials yet. Stockpile resources via Harvest missions or by salvaging common gear."
+          />
+        ) : (
+          <div className="grid-responsive" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
+            <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px', background: 'rgba(0,0,0,0.2)' }}>
+              <div style={{ fontSize: 32 }}>⛏️</div>
+              <div>
+                <div style={{ fontSize: 13, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: 1 }}>Ore</div>
+                <div style={{ fontSize: 24, fontWeight: 800 }}>{ores.length}</div>
+              </div>
+            </div>
+            <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px', background: 'rgba(0,0,0,0.2)' }}>
+              <div style={{ fontSize: 32 }}>🧩</div>
+              <div>
+                <div style={{ fontSize: 13, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: 1 }}>Scrap</div>
+                <div style={{ fontSize: 24, fontWeight: 800 }}>{scraps.length}</div>
+              </div>
+            </div>
+            <div className="card" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px', background: 'rgba(0,0,0,0.2)' }}>
+              <div style={{ fontSize: 32 }}>📘</div>
+              <div>
+                <div style={{ fontSize: 13, textTransform: 'uppercase', color: 'var(--text-muted)', letterSpacing: 1 }}>Essence</div>
+                <div style={{ fontSize: 24, fontWeight: 800 }}>{essences.length}</div>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Section>
 
-      {/* Weapons section */}
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>⚔️ Weapons ({weapons.length})</h2>
-        {weapons.length === 0
-          ? <p style={styles.empty}>No weapons yet — complete quests to earn loot!</p>
-          : <div style={styles.itemGrid}>{weapons.map(item => <ItemCard key={item.id} item={item} onEquip={() => handleEquip(item.id, SLOT_WEAPON)} onSalvage={() => handleSalvage(item.id)} acting={acting === item.id || acting === `salvage:${item.id}`} disabled={!!acting} showEquip={!!heroId} />)}</div>
-        }
-      </section>
-
-      {/* Armor section */}
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>🛡 Armor ({armors.length})</h2>
-        {armors.length === 0
-          ? <p style={styles.empty}>No armor yet — complete quests to earn loot!</p>
-          : <div style={styles.itemGrid}>{armors.map(item => <ItemCard key={item.id} item={item} onEquip={() => handleEquip(item.id, SLOT_ARMOR)} onSalvage={() => handleSalvage(item.id)} acting={acting === item.id || acting === `salvage:${item.id}`} disabled={!!acting} showEquip={!!heroId} />)}</div>
-        }
-      </section>
-
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>🧱 Materials ({materials.length})</h2>
-        {materials.length === 0
-          ? <p style={styles.empty}>No materials yet — common quest rewards now stockpile future crafting resources.</p>
-          : (
-            <div style={styles.materialGrid}>
-              {ores.map(material => (
-                <div key={material.id} style={styles.materialCard}>
-                  <div style={styles.materialIcon}>⛏️</div>
-                  <div style={styles.materialName}>{material.name}</div>
-                  <div style={styles.materialMeta}>Ore • Value {material.value}</div>
-                </div>
-              ))}
-              {scraps.map(material => (
-                <div key={material.id} style={styles.materialCard}>
-                  <div style={styles.materialIcon}>🧩</div>
-                  <div style={styles.materialName}>{material.name}</div>
-                  <div style={styles.materialMeta}>Scrap • Value {material.value}</div>
-                </div>
-              ))}
-              {essences.map(material => (
-                <div key={material.id} style={styles.materialCard}>
-                  <div style={styles.materialIcon}>📘</div>
-                  <div style={styles.materialName}>{material.name}</div>
-                  <div style={styles.materialMeta}>Essence • Value {material.value}</div>
-                </div>
-              ))}
-            </div>
-          )
-        }
-      </section>
-
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>🛠 Blacksmith Recipes</h2>
-        <p style={styles.craftingIntro}>Convert mission drops into affix-focused gear instead of waiting for rare direct drops.</p>
-        <div style={styles.recipeGrid}>
+      {/* ZONE 4: THE BLACKSMITH */}
+      <Section
+        title="The Blacksmith"
+        subtitle="Convert excess materials and salvage into masterwork, archetype-specific gear."
+      >
+        <div className="grid-responsive" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }}>
           {RECIPES.map((recipe) => {
             const selected = selectMaterialsForRecipe(materials, recipe.materialTypes);
             const professionMatch = recipe.profession === undefined || heroProfile.profession === recipe.profession;
             const rankMatch = recipe.rank === undefined || heroProfile.professionRank >= recipe.rank;
             const canCraft = !!selected && !acting && !!heroId && professionMatch && rankMatch;
+            
             return (
-              <div key={recipe.id} style={styles.recipeCard}>
-                <div style={styles.recipeHeader}>
-                  <span style={styles.recipeIcon}>{recipe.icon}</span>
-                  <div>
-                    <div style={styles.recipeName}>{recipe.name}</div>
-                    <div style={styles.recipeAffix}>{recipe.affix} Affix</div>
+              <Card key={recipe.id} style={{ opacity: canCraft ? 1 : 0.6, transition: 'opacity 0.2s', border: canCraft ? '1px solid rgba(245,158,11,0.3)' : undefined }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span style={{ fontSize: 32 }}>{recipe.icon}</span>
+                    <div>
+                      <div style={{ fontSize: 16, fontWeight: 800 }}>{recipe.name}</div>
+                      <div style={{ fontSize: 12, color: 'var(--color-accent-primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>{recipe.affix} Affix Gear</div>
+                    </div>
                   </div>
+                  {canCraft && <Badge variant="warning" style={{ fontSize: 11 }}>Ready</Badge>}
                 </div>
-                <div style={styles.recipeText}>{recipe.description}</div>
-                <div style={styles.recipeRequirements}>
+                
+                <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
                   {recipe.materialTypes.map((materialType, index) => (
-                    <span key={`${recipe.id}-${index}`} style={styles.recipeChip}>{MATERIAL_LABEL[materialType]}</span>
+                    <Badge key={`${recipe.id}-${index}`} style={{ background: 'rgba(255,255,255,0.05)' }}>
+                      {MATERIAL_LABEL[materialType]}
+                    </Badge>
                   ))}
                 </div>
-                {recipe.profession !== undefined && (
-                  <div style={styles.recipeLock}>Requires {PROFESSION_LABEL[recipe.profession]}</div>
-                )}
-                {recipe.rank !== undefined && (
-                  <div style={styles.recipeLock}>Requires {recipe.rank === 1 ? 'Adept' : 'Master'} rank</div>
-                )}
-                <button
-                  style={{ ...styles.craftBtn, opacity: canCraft ? 1 : 0.5 }}
+
+                <div style={{ minHeight: 48, marginBottom: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {recipe.profession !== undefined && (
+                    <div style={{ fontSize: 12, color: professionMatch ? 'var(--text-secondary)' : '#fca5a5', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>{professionMatch ? '✓' : '❌'}</span> Requires {PROFESSION_LABEL[recipe.profession]} Profession
+                    </div>
+                  )}
+                  {recipe.rank !== undefined && (
+                    <div style={{ fontSize: 12, color: rankMatch ? 'var(--text-secondary)' : '#fca5a5', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>{rankMatch ? '✓' : '❌'}</span> Requires {recipe.rank === 1 ? 'Adept' : 'Master'} rank
+                    </div>
+                  )}
+                  {!selected && professionMatch && rankMatch && (
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>⚠️</span> Insufficient Materials
+                    </div>
+                  )}
+                </div>
+
+                <Button
+                  variant={canCraft ? "warning" : "ghost"}
+                  fullWidth
                   onClick={() => handleCraft(recipe.id, recipe.materialTypes)}
                   disabled={!canCraft}
+                  style={{ padding: '12px', fontSize: 14 }}
                 >
-                  {acting === `craft:${recipe.id}` ? 'Crafting...' : !heroId ? 'Hero Required' : !professionMatch ? 'Wrong Profession' : !rankMatch ? 'Rank Too Low' : canCraft ? 'Craft' : 'Missing Materials'}
-                </button>
-              </div>
+                   {acting === `craft:${recipe.id}` ? 'Crafting...' : !heroId ? 'Hero Required' : !professionMatch ? 'Wrong Profession' : !rankMatch ? 'Rank Too Low' : !selected ? 'Missing Materials' : 'Craft'}
+                </Button>
+              </Card>
             );
           })}
         </div>
-      </section>
+      </Section>
 
-      {items.length === 0 && materials.length === 0 && !loading && (
-        <div style={styles.emptyState}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>🏆</div>
-          <p>Your inventory is empty.</p>
-          <button style={styles.questBtn} onClick={() => router.push(`/quest?heroId=${heroId}`)}>
-            ⚔️ Go on a Quest
-          </button>
-        </div>
-      )}
     </main>
   );
 }
 
-function ItemCard({ item, onEquip, onSalvage, acting, disabled, showEquip }: {
+function ItemCard({ item, isEquipped, actingStatus, onEquip, onSalvageClick, onSalvageCancel, needsSalvageConfirm, disabled, showActions }: {
   item: EquipmentItem;
+  isEquipped: boolean;
+  actingStatus?: string;
   onEquip: () => void;
-  onSalvage: () => void;
-  acting: boolean;
+  onSalvageClick: () => void;
+  onSalvageCancel: () => void;
+  needsSalvageConfirm: boolean;
   disabled: boolean;
-  showEquip: boolean;
+  showActions: boolean;
 }) {
   return (
-    <div style={{
-      ...itemStyles.card,
-      background: RARITY_COLOR[item.rarity],
-      borderColor: RARITY_BORDER[item.rarity],
+    <div className="card" style={{
+      background: isEquipped ? 'rgba(59,130,246,0.1)' : RARITY_COLOR[item.rarity],
+      borderColor: isEquipped ? 'var(--color-accent-primary)' : RARITY_BORDER[item.rarity],
+      display: 'flex', flexDirection: 'column', gap: 12, position: 'relative', overflow: 'hidden',
+      padding: '20px 16px'
     }}>
-      <div style={itemStyles.rarityBadge}>{RARITY_LABEL[item.rarity]}</div>
-      <div style={itemStyles.icon}>{item.eqType === 0 ? '⚔️' : '🛡'}</div>
-      <h3 style={itemStyles.name}>{item.name}</h3>
-      <div style={itemStyles.power}>+{item.power} ATK</div>
-      <div style={itemStyles.affix}>{AFFIX_LABEL[item.affix]}</div>
-      <div style={itemStyles.objId} title={item.id}>{item.id.slice(0,10)}...</div>
-      {showEquip && (
-        <div style={itemStyles.actionRow}>
-          <button
-            style={{ ...itemStyles.equipBtn, opacity: disabled ? 0.5 : 1 }}
-            onClick={onEquip}
-            disabled={disabled}
-          >
-            {acting ? 'Working...' : 'Equip'}
-          </button>
-          <button
-            style={{ ...itemStyles.salvageBtn, opacity: disabled ? 0.5 : 1 }}
-            onClick={onSalvage}
-            disabled={disabled}
-          >
-            {acting ? 'Working...' : 'Salvage'}
-          </button>
+      {isEquipped && (
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, background: 'var(--color-accent-primary)', color: '#fff', fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center', padding: '4px 0', zIndex: 1 }}>
+          Active
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginTop: isEquipped ? 16 : 0 }}>
+        <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: 1, color: isEquipped ? 'var(--color-accent-primary)' : 'var(--text-secondary)' }}>
+          {RARITY_LABEL[item.rarity]}
+        </div>
+        <div style={{ fontSize: 24, opacity: 0.8 }}>{item.eqType === 0 ? '⚔️' : '🛡'}</div>
+      </div>
+      
+      <div>
+        <h3 style={{ margin: '0 0 6px', fontSize: 16, fontWeight: 800, color: 'var(--text-primary)', lineHeight: 1.2 }}>{item.name}</h3>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Badge variant="warning" style={{ fontSize: 11 }}>+{item.power} {item.eqType === 0 ? 'ATK' : 'DEF'}</Badge>
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', fontWeight: 600 }}>{AFFIX_LABEL[item.affix]}</div>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 10, color: 'var(--text-muted)', cursor: 'help', fontFamily: 'monospace' }} title={item.id}>
+        {item.id.slice(0,10)}...
+      </div>
+
+      {showActions && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 'auto', paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+          {!isEquipped && (
+            <Button
+              variant="primary"
+              onClick={onEquip}
+              disabled={disabled || needsSalvageConfirm}
+              style={{ padding: '8px', fontSize: 12 }}
+            >
+              {actingStatus && actingStatus.startsWith('Equip') ? actingStatus : 'Equip'}
+            </Button>
+          )}
+          
+          {!isEquipped && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              {needsSalvageConfirm ? (
+                <>
+                  <Button variant="ghost" onClick={onSalvageCancel} disabled={disabled} style={{ flex: 1, padding: '8px', fontSize: 12 }}>Cancel</Button>
+                  <Button variant="ghost" onClick={onSalvageClick} disabled={disabled} style={{ flex: 1, padding: '8px', fontSize: 12, background: 'rgba(248,113,113,0.2)', color: '#f87171', border: '1px solid #f87171' }}>Confirm?</Button>
+                </>
+              ) : (
+                <Button variant="ghost" onClick={onSalvageClick} disabled={disabled} style={{ width: '100%', padding: '8px', fontSize: 12, color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.02)' }}>
+                  {actingStatus && actingStatus.startsWith('Salvage') ? actingStatus : 'Salvage'}
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    minHeight: '100vh',
-    background: 'linear-gradient(135deg, #0f0c29, #302b63, #24243e)',
-    fontFamily: "'Inter', sans-serif",
-    color: '#fff',
-    padding: '24px 20px',
-  },
-  header:       { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
-  backBtn:      { background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', padding: '8px 16px', borderRadius: 8, cursor: 'pointer' },
-  title:        { fontSize: 22, fontWeight: 800, margin: 0 },
-  feedbackBanner: { background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 12, padding: '10px 16px', marginBottom: 16, color: '#86efac', fontSize: 14 },
-  errorBanner:  { background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 12, padding: '10px 16px', marginBottom: 16, color: '#fca5a5', fontSize: 14 },
-  judgeCard: { background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 14, padding: '14px 16px', marginBottom: 16, display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center' },
-  judgeTitle: { fontSize: 14, fontWeight: 800, marginBottom: 4 },
-  judgeText: { fontSize: 12, color: 'rgba(255,255,255,0.72)' },
-  judgeBtn: { background: 'linear-gradient(135deg,#f59e0b,#b45309)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 14px', cursor: 'pointer', fontWeight: 800, whiteSpace: 'nowrap' },
-  heroSlots:    { background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 16, padding: '16px 20px', marginBottom: 24 },
-  sectionTitle: { fontSize: 16, fontWeight: 700, margin: '0 0 14px' },
-  slotsRow:     { display: 'flex', gap: 12 },
-  slotCard:     { flex: 1, background: 'rgba(255,255,255,0.05)', borderRadius: 12, padding: 14, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, border: '1px solid rgba(255,255,255,0.1)' },
-  slotIcon:     { fontSize: 28 },
-  slotLabel:    { fontSize: 12, color: 'rgba(255,255,255,0.6)' },
-  smallBtn:     { background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', color: '#fff', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer' },
-  section:      { marginBottom: 24 },
-  itemGrid:     { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 },
-  materialGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 },
-  materialCard: { borderRadius: 14, padding: '14px 12px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' },
-  materialIcon: { fontSize: 28, marginBottom: 8 },
-  materialName: { fontSize: 14, fontWeight: 700, marginBottom: 4 },
-  materialMeta: { fontSize: 12, color: 'rgba(255,255,255,0.55)' },
-  craftingIntro: { color: 'rgba(255,255,255,0.6)', fontSize: 14, margin: '0 0 14px' },
-  recipeGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
-  recipeCard: { borderRadius: 14, padding: '16px 14px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' },
-  recipeHeader: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 },
-  recipeIcon: { fontSize: 28 },
-  recipeName: { fontSize: 15, fontWeight: 800 },
-  recipeAffix: { fontSize: 12, color: '#bfdbfe', fontWeight: 700 },
-  recipeText: { fontSize: 13, color: 'rgba(255,255,255,0.65)', marginBottom: 10 },
-  recipeRequirements: { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
-  recipeChip: { fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.75)', background: 'rgba(255,255,255,0.08)', borderRadius: 999, padding: '6px 10px' },
-  recipeLock: { fontSize: 12, color: '#fcd34d', marginBottom: 12, fontWeight: 700 },
-  craftBtn: { width: '100%', background: 'linear-gradient(135deg,#f59e0b,#b45309)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 12px', cursor: 'pointer', fontWeight: 700, fontSize: 13 },
-  empty:        { color: 'rgba(255,255,255,0.4)', fontSize: 14 },
-  emptyState:   { textAlign: 'center', padding: '40px 20px', color: 'rgba(255,255,255,0.6)' },
-  questBtn:     { marginTop: 16, background: 'linear-gradient(135deg,#667eea,#764ba2)', color: '#fff', border: 'none', borderRadius: 12, padding: '12px 28px', cursor: 'pointer', fontWeight: 600 },
-};
-
-const itemStyles: Record<string, React.CSSProperties> = {
-  card: {
-    border: '1px solid', borderRadius: 14,
-    padding: '14px 12px', display: 'flex', flexDirection: 'column',
-    alignItems: 'center', gap: 6,
-  },
-  rarityBadge: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: 1, color: 'rgba(255,255,255,0.7)' },
-  icon:        { fontSize: 32 },
-  name:        { margin: 0, fontSize: 13, fontWeight: 700, textAlign: 'center' },
-  power:       { fontSize: 12, color: '#fbbf24', fontWeight: 600 },
-  affix:       { fontSize: 11, color: '#bfdbfe', fontWeight: 700 },
-  objId:       { fontSize: 10, color: 'rgba(255,255,255,0.3)', cursor: 'help' },
-  actionRow:   { display: 'grid', width: '100%', gap: 8, marginTop: 4 },
-  equipBtn:    { width: '100%', background: 'linear-gradient(135deg,#667eea,#764ba2)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px', cursor: 'pointer', fontWeight: 600, fontSize: 13 },
-  salvageBtn:  { width: '100%', background: 'rgba(248,113,113,0.16)', color: '#fecaca', border: '1px solid rgba(248,113,113,0.35)', borderRadius: 8, padding: '8px', cursor: 'pointer', fontWeight: 600, fontSize: 13 },
-};
