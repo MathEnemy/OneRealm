@@ -338,20 +338,20 @@ export default function InventoryPage() {
         const dynamicFields = await getDynamicFields(suiClient, { parentId: heroId });
         const nextSlots: HeroSlotState = { weapon: null, armor: null };
 
-        for (const field of dynamicFields.data) {
-          if (!field.objectId) {
-            continue;
-          }
-          const item = await loadEquipmentObject(field.objectId);
-          if (!item) {
-            continue;
-          }
+        const validFields = dynamicFields.data.filter((f: any) => f.objectId);
+        const loadedItems = await Promise.all(
+          validFields.map(async (field: any) => {
+            const item = await loadEquipmentObject(field.objectId);
+            return { field, item };
+          })
+        );
 
+        for (const { field, item } of loadedItems) {
+          if (!item) continue;
           const slot = dynamicFieldName(field);
           if (slot === SLOT_WEAPON) {
             nextSlots.weapon = item;
-          }
-          if (slot === SLOT_ARMOR) {
+          } else if (slot === SLOT_ARMOR) {
             nextSlots.armor = item;
           }
         }

@@ -1,5 +1,5 @@
 import { Transaction } from '@onelabs/sui/transactions';
-import { normalizeSuiAddress, normalizeSuiObjectId } from '@onelabs/sui/utils';
+import { fromBase64, normalizeSuiAddress, normalizeSuiObjectId } from '@onelabs/sui/utils';
 import { PACKAGE_ID, SPONSOR_ADDRESS } from './sui-client';
 
 const ALLOWED_TARGETS = new Set([
@@ -12,7 +12,18 @@ const ALLOWED_TARGETS = new Set([
 ]);
 
 export function verifySponsoredTransaction(txBytes: string, expectedSender: string) {
-  const tx = Transaction.from(txBytes);
+  const serialized = Buffer.from(txBytes, 'base64');
+  if (serialized.length > 2048) {
+    throw { status: 400, error: 'Transaction payload too large' };
+  }
+
+  let txData;
+  try {
+    txData = fromBase64(txBytes);
+  } catch {
+    txData = txBytes;
+  }
+  const tx = Transaction.from(txData);
   const data = tx.getData();
 
   if (normalizeSuiAddress(data.sender ?? '') !== normalizeSuiAddress(expectedSender)) {
@@ -40,5 +51,20 @@ export function verifySponsoredTransaction(txBytes: string, expectedSender: stri
   const target = `${normalizeSuiObjectId(moveCall.package)}::${moveCall.module}::${moveCall.function}`;
   if (!ALLOWED_TARGETS.has(target)) {
     throw { status: 401, error: 'MoveCall target is not allowlisted' };
+  }
+
+  if (target.endsWith('::hero::mint_to_sender')) {
+    const nameArg = moveCall.arguments?.[0] as any;
+    const index = nameArg?.Input ?? nameArg?.index;
+    if (index !== undefined) {
+      const input = data.inputs[index] as any;
+      const val = input?.value ?? input?.Pure?.bytes;
+      if (Array.isArray(val) && val.length > 32) {
+        throw { status: 401, error: 'Name argument too long' };
+      }
+      if (typeof val === 'string' && val.length > 64) {
+        throw { status: 401, error: 'Name argument too long' };
+      }
+    }
   }
 }

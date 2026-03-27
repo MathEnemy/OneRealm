@@ -7,7 +7,7 @@ import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { handleSponsor } from './sponsor';
-import { createSession, generateLoot, grantJudgeBundle } from './session';
+import { createSession, generateLoot, grantJudgeBundle, verifySessionOwnership } from './session';
 import { buildBattleTx } from './battle';
 import { getAiHint } from './ai-hint';
 import { createAuthSession, createDemoAuthSession, requireAuth } from './auth';
@@ -190,8 +190,9 @@ app.post('/api/session/loot', async (req: Request, res: Response, next: NextFunc
     if (!sessionId) {
       return res.status(400).json({ error: 'Missing sessionId' });
     }
+    await verifySessionOwnership(sessionId, authSession.address);
     consumeQuotaOrThrow(authSession.address);
-    const digest = await generateLoot(sessionId, authSession.address);
+    const digest = await generateLoot(sessionId);
     return res.json({ tx1Digest: digest });
   } catch (err) {
     next(err);

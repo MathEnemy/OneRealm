@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { Ed25519Keypair } from '@onelabs/sui/keypairs/ed25519';
 import { Transaction } from '@onelabs/sui/transactions';
 
-process.env.ONEREALM_PACKAGE_ID = '0xabc';
-process.env.SUI_RPC_URL = 'https://fullnode.devnet.sui.io';
-process.env.GAME_AUTHORITY_OBJECT_ID = '0x999';
+process.env.ONEREALM_PACKAGE_ID = '0x9348d3e1e8fb08948bf9d31c1ee4bd7fc93526e4f0150866a14c240ed515ce26';
+process.env.SUI_RPC_URL = 'https://rpc-testnet.onelabs.cc:443';
+process.env.GAME_AUTHORITY_OBJECT_ID = '0x7eabb0ae0760c658c93b9c904defbe9ea5c627efe6b47f10ba935127758e0a4a';
 process.env.GOOGLE_CLIENT_ID = 'test-google-client-id';
 
 const sponsor = new Ed25519Keypair();
@@ -18,8 +18,8 @@ test('verifySponsoredTransaction accepts allowlisted mint tx', async () => {
 
   const tx = new Transaction();
   tx.moveCall({
-    target: '0xabc::hero::mint_to_sender',
-    arguments: [tx.pure.string('Alice'), tx.pure.u8(0), tx.pure.u8(0)],
+    target: '0x9348d3e1e8fb08948bf9d31c1ee4bd7fc93526e4f0150866a14c240ed515ce26::hero::mint_to_sender',
+    arguments: [tx.pure.vector('u8', Array.from(Buffer.from('Alice'))), tx.pure.u8(0), tx.pure.u8(0)],
   });
   tx.setSender('0x111');
   tx.setGasOwner(sponsorAddress);
@@ -32,7 +32,7 @@ test('verifySponsoredTransaction rejects non-allowlisted target', async () => {
 
   const tx = new Transaction();
   tx.moveCall({
-    target: '0xabc::hero::burn',
+    target: '0x9348d3e1e8fb08948bf9d31c1ee4bd7fc93526e4f0150866a14c240ed515ce26::hero::burn',
     arguments: [],
   });
   tx.setSender('0x111');
@@ -55,8 +55,8 @@ test('verifySponsoredTransaction rejects sender mismatch', async () => {
 
   const tx = new Transaction();
   tx.moveCall({
-    target: '0xabc::hero::mint_to_sender',
-    arguments: [tx.pure.string('Alice'), tx.pure.u8(0), tx.pure.u8(0)],
+    target: '0x9348d3e1e8fb08948bf9d31c1ee4bd7fc93526e4f0150866a14c240ed515ce26::hero::mint_to_sender',
+    arguments: [tx.pure.vector('u8', Array.from(Buffer.from('Alice'))), tx.pure.u8(0), tx.pure.u8(0)],
   });
   tx.setSender('0x111');
   tx.setGasOwner(sponsorAddress);
@@ -78,7 +78,7 @@ test('verifySponsoredTransaction accepts allowlisted salvage tx', async () => {
 
   const tx = new Transaction();
   tx.moveCall({
-    target: '0xabc::equipment::salvage_to_sender',
+    target: '0x9348d3e1e8fb08948bf9d31c1ee4bd7fc93526e4f0150866a14c240ed515ce26::equipment::salvage_to_sender',
     arguments: [tx.object('0x123')],
   });
   tx.setSender('0x111');
@@ -92,11 +92,37 @@ test('verifySponsoredTransaction accepts allowlisted blacksmith tx', async () =>
 
   const tx = new Transaction();
   tx.moveCall({
-    target: '0xabc::blacksmith::craft_to_sender',
+    target: '0x9348d3e1e8fb08948bf9d31c1ee4bd7fc93526e4f0150866a14c240ed515ce26::blacksmith::craft_to_sender',
     arguments: [tx.pure.u8(0), tx.object('0x222'), tx.object('0x123'), tx.object('0x124'), tx.object('0x125')],
   });
   tx.setSender('0x111');
   tx.setGasOwner(sponsorAddress);
 
   verifySponsoredTransaction(JSON.stringify(tx.getData()), '0x111');
+});
+
+test('verifySponsoredTransaction accepts production-realistic base64 encoded bytes', async () => {
+  const { verifySponsoredTransaction } = await import('./tx-policy');
+  const { toBase64 } = await import('@onelabs/sui/utils');
+  const { SuiClient } = await import('@onelabs/sui/client');
+  const client = new SuiClient({ url: 'https://rpc-testnet.onelabs.cc:443' });
+
+  const tx = new Transaction();
+  tx.moveCall({
+    target: '0x9348d3e1e8fb08948bf9d31c1ee4bd7fc93526e4f0150866a14c240ed515ce26::hero::mint_to_sender',
+    arguments: [tx.pure.vector('u8', Array.from(Buffer.from('Alice'))), tx.pure.u8(0), tx.pure.u8(0)],
+  });
+  tx.setSender('0x111');
+  tx.setGasOwner(sponsorAddress);
+  tx.setGasBudget(10000000);
+  tx.setGasPayment([{
+    objectId: '0x7eabb0ae0760c658c93b9c904defbe9ea5c627efe6b47f10ba935127758e0a4a',
+    digest: '4v5rDMCwXb3Le5N6QZmegUPRVVszrgFUeLwYrUepN43g',
+    version: 1
+  }]);
+
+  const txBytes = await tx.build({ client });
+  const b64 = toBase64(txBytes);
+
+  verifySponsoredTransaction(b64, '0x111');
 });

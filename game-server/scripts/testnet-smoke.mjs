@@ -24,10 +24,12 @@ const signer = Ed25519Keypair.fromSecretKey(
   decodeSuiPrivateKey(process.env.SPONSOR_PRIVATE_KEY).secretKey,
 );
 
+const playerSigner = new Ed25519Keypair();
+const PLAYER = playerSigner.toSuiAddress();
+
 const PACKAGE_ID = process.env.ONEREALM_PACKAGE_ID;
-const PLAYER = process.env.SPONSOR_ADDRESS;
 const AUTHORITY = process.env.GAME_AUTHORITY_OBJECT_ID;
-const JUDGE_EXPEDITION_MS = Number(process.env.JUDGE_EXPEDITION_MS ?? '30000');
+const JUDGE_EXPEDITION_MS = Number(process.env.JUDGE_EXPEDITION_MS ?? '15000');
 
 function target(module, fn) {
   return `${PACKAGE_ID}::${module}::${fn}`;
@@ -54,11 +56,41 @@ async function buildWithRetry(tx, attempts = 6) {
   throw lastError;
 }
 
-async function signAndExecute(tx) {
+async function playerSponsoredTx(tx) {
   let lastError = null;
   for (let attempt = 1; attempt <= 5; attempt += 1) {
     try {
       tx.setSender(PLAYER);
+      tx.setGasOwner(signer.toSuiAddress());
+      tx.setGasBudget(100_000_000);
+      const bytes = await buildWithRetry(tx);
+      const playerSig = await playerSigner.signTransaction(bytes);
+      const sponsorSig = await signer.signTransaction(bytes);
+      return await client.executeTransactionBlock({
+        transactionBlock: bytes,
+        signature: [playerSig.signature, sponsorSig.signature],
+        options: { showEffects: true, showObjectChanges: true, showEvents: true },
+      });
+    } catch (error) {
+      lastError = error;
+      const message = String(error?.message ?? error);
+      const retryable = message.includes('not available for consumption')
+        || message.includes('Unexpected status code: 502')
+        || message.includes('Unexpected status code: 503');
+      if (!retryable || attempt === 5) {
+        throw error;
+      }
+      await sleep(750 * attempt);
+    }
+  }
+  throw lastError;
+}
+
+async function sponsorTx(tx) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      tx.setSender(signer.toSuiAddress());
       tx.setGasBudget(100_000_000);
       const bytes = await buildWithRetry(tx);
       const { signature } = await signer.signTransaction(bytes);
@@ -121,7 +153,7 @@ async function mintHero() {
       tx.pure.u8(0),
     ],
   });
-  const result = await signAndExecute(tx);
+  const result = await playerSponsoredTx(tx);
   const heroId = firstCreatedObject(result, '::hero::Hero');
   if (!heroId) {
     throw new Error('Mint hero did not create Hero object');
@@ -135,7 +167,7 @@ async function grantJudgeBundle() {
     target: target('mission', 'grant_judge_bundle'),
     arguments: [tx.object(AUTHORITY), tx.pure.address(PLAYER)],
   });
-  return signAndExecute(tx);
+  return sponsorTx(tx);
 }
 
 async function craftRaiderBlade(heroId) {
@@ -169,7 +201,7 @@ async function craftRaiderBlade(heroId) {
     ],
   });
 
-  const result = await signAndExecute(tx);
+  const result = await playerSponsoredTx(tx);
   const equipmentId = firstCreatedObject(result, '::equipment::Equipment');
   if (!equipmentId) {
     throw new Error('Craft did not create Equipment object');
@@ -187,7 +219,7 @@ async function equipWeapon(heroId, equipmentId) {
       tx.object(equipmentId),
     ],
   });
-  return signAndExecute(tx);
+  return playerSponsoredTx(tx);
 }
 
 async function createJudgeExpedition(heroId) {
@@ -205,8 +237,8 @@ async function createJudgeExpedition(heroId) {
       tx.pure.u64(readyAtMs),
     ],
   });
-  tx.transferObjects([session], tx.pure.address(PLAYER));
-  const result = await signAndExecute(tx);
+  tx.transferObjects([session], tx.pure.address(signer.toSuiAddress()));
+  const result = await sponsorTx(tx);
   const sessionId = firstCreatedObject(result, '::mission::MissionSession');
   if (!sessionId) {
     throw new Error('Judge expedition did not create MissionSession');
@@ -220,7 +252,7 @@ async function generateLoot(sessionId) {
     target: target('mission', 'generate_loot'),
     arguments: [tx.object(AUTHORITY), tx.object('0x8'), tx.object(sessionId)],
   });
-  return signAndExecute(tx);
+  return sponsorTx(tx);
 }
 
 async function settle(sessionId, heroId) {
@@ -228,19 +260,19 @@ async function settle(sessionId, heroId) {
   tx.moveCall({
     target: target('mission', 'settle_and_distribute'),
     arguments: [
-      tx.object(AUTHORITY),
       tx.object(sessionId),
       tx.object(heroId),
       tx.object('0x6'),
     ],
   });
-  return signAndExecute(tx);
+  return playerSponsoredTx(tx);
 }
 
 async function main() {
-  console.log('== OneRealm Judge Smoke ==');
+  console.log('== OneRealm Judge Smoke (Real User Simulation) ==');
   console.log(`Package: ${PACKAGE_ID}`);
-  console.log(`Player: ${PLAYER}`);
+  console.log(`Player (ephemeral): ${PLAYER}`);
+  console.log(`Sponsor: ${signer.toSuiAddress()}`);
   console.log(`Judge expedition ms: ${JUDGE_EXPEDITION_MS}`);
 
   const { heroId, digest: heroDigest } = await mintHero();
@@ -248,6 +280,9 @@ async function main() {
 
   const bundleResult = await grantJudgeBundle();
   console.log(`judge bundle: ok (${bundleResult.digest})`);
+
+  console.log('waiting 3s for RPC indexer...');
+  await sleep(3000);
 
   const { equipmentId, digest: craftDigest } = await craftRaiderBlade(heroId);
   console.log(`craft raider blade: ok (${craftDigest}) equipment=${equipmentId}`);

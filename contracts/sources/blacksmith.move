@@ -90,7 +90,7 @@ module onerealm::blacksmith {
         };
 
         let rarity_sum = rarity_a + rarity_b + rarity_c;
-        let rarity = if (rarity_sum >= 4) 2 else 1;
+        let rarity = if (rarity_sum >= 4) 2 else if (rarity_sum >= 2) 1 else 0;
         let power = 20 + value_a + value_b + value_c + (rarity as u64) * 4 + bonus_power;
 
         let eq = onerealm::equipment::create(eq_type, name, power, rarity, affix, ctx);

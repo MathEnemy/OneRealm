@@ -125,7 +125,7 @@ export async function grantJudgeBundle(playerAddress: string): Promise<string> {
   return result.digest;
 }
 
-export async function generateLoot(sessionId: string, playerAddress: string): Promise<string> {
+export async function verifySessionOwnership(sessionId: string, playerAddress: string): Promise<void> {
   const sessionObject = await withRpcRetry('generate_loot:getObject', () => suiClient.getObject({
     id: sessionId,
     options: { showContent: true },
@@ -135,7 +135,9 @@ export async function generateLoot(sessionId: string, playerAddress: string): Pr
   if (sessionFields.player !== normalizeSuiAddress(playerAddress)) {
     throw Object.assign(new Error('Session does not belong to authenticated player'), { status: 401 });
   }
+}
 
+export async function generateLoot(sessionId: string): Promise<string> {
   const tx = new Transaction();
   tx.moveCall({
     target: `${PACKAGE_ID}::mission::generate_loot`,

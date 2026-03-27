@@ -28,6 +28,7 @@ module onerealm::hero {
     const ETypeMismatch: u64 = 3;
     const EInvalidArchetype: u64 = 4;
     const EInvalidProfession: u64 = 5;
+    const ENameTooLong: u64 = 6;
 
     // === Struct ===
     public struct Hero has key, store {
@@ -43,6 +44,7 @@ module onerealm::hero {
 
     // === Constructor ===
     public fun mint(name: vector<u8>, archetype: u8, profession: u8, ctx: &mut one::tx_context::TxContext): Hero {
+        assert!(name.length() <= 32, ENameTooLong);
         assert!(
             archetype == ARCHETYPE_WARRIOR || archetype == ARCHETYPE_RANGER || archetype == ARCHETYPE_ARCANIST,
             EInvalidArchetype

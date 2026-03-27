@@ -1,5 +1,40 @@
+import fs from 'node:fs';
+
 const RATE_LIMIT_PER_DAY = 10;
 const dailyCounters = new Map<string, number>();
+
+const DB_PATH = '/tmp/onerealm-rate-limits.json';
+
+if (fs.existsSync(DB_PATH)) {
+  try {
+    const data = JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
+    for (const [k, v] of Object.entries(data)) {
+      dailyCounters.set(k, v as number);
+    }
+    console.log('[rate-limit] Loaded from snapshot');
+  } catch (err) {
+    console.error('Failed to load rate limits:', err);
+  }
+}
+
+function saveRateLimits() {
+  try {
+    fs.writeFileSync(DB_PATH, JSON.stringify(Object.fromEntries(dailyCounters)));
+  } catch (err) {
+    // ignore
+  }
+}
+
+setInterval(saveRateLimits, 5 * 60 * 1000);
+
+process.on('SIGTERM', () => {
+  saveRateLimits();
+  process.exit(0);
+});
+process.on('SIGINT', () => {
+  saveRateLimits();
+  process.exit(0);
+});
 
 function getMillisToMidnight(): number {
   const now = new Date();

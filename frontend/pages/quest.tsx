@@ -71,7 +71,7 @@ export default function QuestPage() {
       if (stored) {
         try {
           const parsed = JSON.parse(stored) as StoredExpeditionState;
-          if (parsed.address === session.address && parsed.readyAtMs > Date.now()) {
+          if (parsed.address === session.address && parsed.sessionId) {
             setMissionType(parsed.missionType);
             setContractType(parsed.contractType);
             setStance(parsed.stance);

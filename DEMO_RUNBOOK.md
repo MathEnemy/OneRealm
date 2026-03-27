@@ -11,7 +11,7 @@
 - Chain: `OneChain Testnet`
 - Judge mode: `enabled`
 - Expedition timer in judge mode: `~30 seconds`
-- Published package: `0x0a9132c81733a3801ccf0866df65722966062a197ff74a7b511be619449d786a`
+- Published package: `0x9348d3e1e8fb08948bf9d31c1ee4bd7fc93526e4f0150866a14c240ed515ce26`
 
 ## Before Demo
 
@@ -20,8 +20,8 @@
 3. Keep one browser tab on `Hero`, one on `Inventory`, one on `Quest` if needed.
 4. Keep this fallback data ready:
    - Sponsor/demo address: `0x98dc92e59a4988b86a987b9b336004beb3f314b2a7fe243f31b45a1344879ad8`
-   - Package ID: `0x0a9132c81733a3801ccf0866df65722966062a197ff74a7b511be619449d786a`
-   - GameAuthority: `0x22d2c508a27e49f2d328565123256994ee333f21c11c56b8f74f14a0448abf17`
+   - Package ID: `0x9348d3e1e8fb08948bf9d31c1ee4bd7fc93526e4f0150866a14c240ed515ce26`
+   - GameAuthority: `0x7eabb0ae0760c658c93b9c904defbe9ea5c627efe6b47f10ba935127758e0a4a`
 
 ## Recommended Demo Flow
 

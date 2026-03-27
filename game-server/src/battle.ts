@@ -24,21 +24,22 @@ export async function buildBattleTx(
     ? (sessionObject.data.content as any).fields
     : {};
   const sessionPlayer = normalizeSuiAddress(fields.player ?? '');
-  const heroId = fields.hero_id;
-
-  if (sessionPlayer !== normalizeSuiAddress(playerAddress)) {
-    throw Object.assign(new Error('Session player mismatch'), { status: 401 });
-  }
-  if (!heroId) {
+  const rawHeroId = fields.hero_id;
+  const heroId = typeof rawHeroId === 'object' && rawHeroId !== null && 'id' in rawHeroId 
+    ? rawHeroId.id 
+    : String(rawHeroId ?? '');
+  
+  if (!heroId || heroId === 'undefined') {
     throw new Error('Session is missing hero binding');
   }
+  
+  const sessionStatus = Number(fields.status ?? -1);
 
   const tx = new Transaction();
 
   tx.moveCall({
     target: `${PACKAGE_ID}::mission::settle_and_distribute`,
     arguments: [
-      tx.object(GAME_AUTHORITY_OBJECT_ID),
       tx.object(sessionId),
       tx.object(heroId),
       tx.object('0x6'),

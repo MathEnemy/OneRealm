@@ -166,7 +166,7 @@ module onerealm::mission {
     entry fun generate_loot(
         _authority: &GameAuthority,
         r:          &one::random::Random,
-        session:    &mut MissionSession,
+        mut session: MissionSession,
         ctx:        &mut one::tx_context::TxContext
     ) {
         assert!(session.status == STATUS_PENDING, ELootAlreadyDone);
@@ -181,9 +181,12 @@ module onerealm::mission {
 
             let loot_type = one::random::generate_u8_in_range(&mut gen, 0, 1);
             let affix = get_affix_for_reward(tier, &mut gen);
-            add_loot(session, tier, loot_type, affix);
+            add_loot(&mut session, tier, loot_type, affix);
             i = i + 1;
         };
+
+        let player = session.player;
+        one::transfer::public_transfer(session, player);
     }
 
     public(package) fun settle(
@@ -240,7 +243,6 @@ module onerealm::mission {
     }
 
     public fun settle_and_distribute(
-        _authority: &GameAuthority,
         session:    &mut MissionSession,
         hero:       &mut Hero,
         clock:      &one::clock::Clock,
