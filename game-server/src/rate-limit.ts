@@ -33,15 +33,15 @@ const DEFAULT_DB_PATH = process.env.RATE_LIMIT_DB_PATH ?? '/tmp/onerealm-rate-li
 
 function getLocalDayKey(nowMs: number): string {
   const now = new Date(nowMs);
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(now.getUTCDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
 function getNextLocalMidnight(nowMs: number): number {
   const midnight = new Date(nowMs);
-  midnight.setHours(24, 0, 0, 0);
+  midnight.setUTCHours(24, 0, 0, 0);
   return midnight.getTime();
 }
 
@@ -104,7 +104,9 @@ export function createRateLimitStore(options: RateLimitStoreOptions = {}) {
         dayKey,
         counters: Object.fromEntries(counters),
       };
-      fs.writeFileSync(dbPath, JSON.stringify(snapshot));
+      const tmpPath = `${dbPath}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(snapshot));
+      fs.renameSync(tmpPath, dbPath);
     } catch {
       // ignore persistence errors
     }

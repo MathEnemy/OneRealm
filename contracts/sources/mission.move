@@ -243,6 +243,7 @@ module onerealm::mission {
     }
 
     public fun settle_and_distribute(
+        _authority: &GameAuthority,
         session:    &mut MissionSession,
         hero:       &mut Hero,
         clock:      &one::clock::Clock,

@@ -6,6 +6,25 @@
 - Backend: `http://localhost:3011`
 - Health: `http://localhost:3011/health`
 
+## Preferred Recording Mode
+
+Use production-style startup for recording, not `next dev`.
+
+1. Backend:
+   - `cd game-server`
+   - `npm run build`
+   - `PORT=3011 npm run start`
+2. Frontend:
+   - `cd frontend`
+   - `rm -rf .next && npm run build`
+   - `npm run start -- --port 3003`
+3. Preflight:
+   - from repo root run `./scripts/demo_go_no_go.sh`
+4. If you check health manually with `curl`, include an allowed origin:
+   - `curl -H "Origin: http://localhost:3003" http://127.0.0.1:3011/health`
+
+This avoids hot-reload noise, `.next` race conditions, and random dev-server chunk misses while recording.
+
 ## Live Config
 
 - Chain: `OneChain Testnet`
@@ -16,6 +35,7 @@
 ## Before Demo
 
 1. Check backend health.
+2. Run `./scripts/demo_go_no_go.sh` and require `GO` before recording.
 2. Open frontend once and confirm `Enter Judge Mode` is visible.
 3. Keep one browser tab on `Hero`, one on `Inventory`, one on `Quest` if needed.
 4. Keep this fallback data ready:
@@ -39,13 +59,43 @@
 
 ## 90-Second Pitch Order
 
-1. `0-10s` Open `/about` and state the problem: most on-chain games still lose users at wallet setup and gas.
-2. `10-20s` Open `/` and click `Enter Judge Mode` to show instant onboarding path for judges.
-3. `20-35s` Mint a hero and call out archetype plus profession as the build identity layer.
-4. `35-50s` Open inventory, click `Claim Bundle`, then craft one recipe to show materials are useful and not dead drops.
-5. `50-60s` Equip the crafted item and call out that assets are still owned on-chain.
-6. `60-75s` Start an `Expedition` from the quest screen and explain that judge mode only compresses timer friction.
-7. `75-90s` Resolve the expedition, show rewards, then close on gasless UX + Move-owned economy + testnet deployment.
+1. `0-08s` Open `/about` and frame the pitch: wallet friction and gas still kill most on-chain game onboarding.
+2. `08-16s` Open `/` and click `Enter Judge Mode` to show the compressed demo lane.
+3. `16-28s` Mint one hero with a simple build identity. Recommended: balanced archetype plus blacksmith profession for the cleanest craft story.
+4. `28-40s` Open inventory and click `Claim Bundle`.
+5. `40-52s` Craft `Raider Blade`.
+6. `52-60s` Equip the crafted weapon and point out that the item remains an owned on-chain object.
+7. `60-72s` Open quest, choose `Training` + `Expedition` + `Balanced`, then launch the mission.
+8. `72-90s` Wait for the ~30s expedition timer, settle, show the result panel, and close on gasless UX + async quest loop.
+
+## Low-Risk Recording Script
+
+Use this exact click path to minimize retries:
+
+1. Start from a clean browser profile or an Incognito window with wallet extensions disabled.
+2. Open `http://localhost:3003/about`.
+3. Move to `http://localhost:3003/` and click `Enter Judge Mode`.
+4. Mint exactly one hero.
+5. On the hero page, click through to inventory.
+6. In inventory, click `Claim Bundle`.
+7. Craft `Raider Blade`.
+8. Equip the new weapon.
+9. Open quest.
+10. Choose `Training`.
+11. Choose `Expedition`.
+12. Choose `Balanced`.
+13. Start the quest and submit the departure step.
+14. Let the timer finish naturally.
+15. Click settle once and wait for the result panel before speaking over rewards.
+
+## Recommended Spoken Track
+
+- `About`: "OneRealm keeps the ownership and async game loop on-chain, but removes wallet and gas friction."
+- `Judge mode`: "For the demo I compress waiting, not the mechanics."
+- `Mint`: "A hero starts as a real on-chain object with build identity."
+- `Inventory`: "Starter materials feed immediately into crafting instead of sitting dead in a wallet."
+- `Quest`: "Missions are async, so progression feels like sending an expedition rather than spamming clicks."
+- `Result`: "Settlement resolves the expedition and delivers the rewards back on-chain."
 
 ## What To Say
 
@@ -56,7 +106,9 @@
 
 ## If Something Flakes
 
-- If frontend port changes, use the local URL printed by `next dev`.
-- If OneChain RPC is flaky, retry once and keep the health endpoint visible.
+- If frontend port changes, use the local URL printed by `next start`.
+- If OneChain RPC is flaky, retry once after 3-5 seconds before resetting the flow.
 - If browser state gets messy, refresh and re-enter judge mode.
+- If extension errors appear in console, switch to a clean or Incognito browser profile.
 - If expedition response looks stale, wait 2-3 seconds and refresh the quest page.
+- If local config drifts, rerun `./scripts/demo_go_no_go.sh` before taking another recording.

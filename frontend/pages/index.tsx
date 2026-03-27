@@ -101,11 +101,11 @@ export default function LoginPage() {
         {/* Auth states */}
         {status === 'idle' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-            <Button variant="primary" fullWidth onClick={handleLogin} style={{ padding: 'var(--space-4)' }}>
+            <Button variant="primary" fullWidth onClick={handleLogin} style={{ padding: 'var(--space-4)' }} data-testid="login-google-button">
               <span style={{ marginRight: 'var(--space-2)' }}>🔑</span> Login with Google
             </Button>
             {JUDGE_MODE && (
-              <Button fullWidth onClick={handleJudgeMode} style={{ padding: 'var(--space-4)' }}>
+              <Button fullWidth onClick={handleJudgeMode} style={{ padding: 'var(--space-4)' }} data-testid="login-judge-button">
                 <span style={{ marginRight: 'var(--space-2)' }}>⚡</span> Enter Judge Mode
               </Button>
             )}

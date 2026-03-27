@@ -1,18 +1,23 @@
 // index.ts — Express server entry point
-// CONTRACTS.md: 3 API endpoints — POST /api/sponsor, /api/battle, /api/ai-hint
-// ADR-006: Game Server is trusted Tx2 builder + sponsor relay
+// CONTRACTS.md: auth, typed action, quest, and hint endpoints
+// ADR-006: Game Server is trusted Tx2 builder and sponsor
 // ADR-008: Rate limit enforced per authenticated address
 
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import { handleSponsor } from './sponsor';
 import { createSession, generateLoot, grantJudgeBundle, verifySessionOwnership, verifyHeroOwnership } from './session';
 import { buildBattleTx } from './battle';
+import {
+  buildCraftAction,
+  buildEquipAction,
+  buildMintHeroAction,
+  buildSalvageAction,
+  buildUnequipAction,
+} from './player-actions';
 import { getAiHint } from './ai-hint';
 import { createAuthSession, createDemoAuthSession, requireAuth } from './auth';
 import { consumeDailyLimitOrThrow, RateLimitBucket } from './rate-limit';
-import { verifySponsoredTransaction } from './tx-policy';
 import { CHAIN_DOCS_URL, CHAIN_FLAVOR, CHAIN_LABEL, CHAIN_NETWORK, CHAIN_RPC_URL, ONEBOX_URL } from './chain';
 
 const app = express();
@@ -27,7 +32,12 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:3000')
 // === Middleware ===
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+    // Allow requests with no origin (server-to-server, health checks, curl)
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    if (ALLOWED_ORIGINS.includes(origin)) {
       callback(null, true);
       return;
     }
@@ -64,6 +74,7 @@ app.get('/health', (_req: Request, res: Response) => {
       sponsorAddress: process.env.SPONSOR_ADDRESS,
       judgeMode: JUDGE_MODE,
       judgeExpeditionMs: JUDGE_EXPEDITION_MS,
+      legacySponsorRelayEnabled: false,
     },
     integrations: [
       'OneChain Move runtime',
@@ -108,6 +119,7 @@ app.post('/api/auth/complete', async (req: Request, res: Response, next: NextFun
 });
 
 app.use('/api/sponsor', requireAuth);
+app.use('/api/actions', requireAuth);
 app.use('/api/session', requireAuth);
 app.use('/api/battle', requireAuth);
 app.use('/api/demo', requireAuth);
@@ -125,7 +137,7 @@ function sendKnownError(err: any, res: Response): boolean {
 }
 
 // ================================================================
-// POST /api/sponsor — Gasless relay (ADR-008, WOW #2)
+// POST /api/sponsor — Legacy relay (hard-disabled)
 // ================================================================
 // INPUT:  { txBytes: string } + Authorization: Bearer <sessionToken>
 // OUTPUT: { sponsoredTxBytes: string, sponsorSig: string }
@@ -134,17 +146,98 @@ function sendKnownError(err: any, res: Response): boolean {
 // ================================================================
 app.post('/api/sponsor', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { txBytes } = req.body;
-    const authSession = req.authSession!;
-
-    if (!txBytes) {
-      return res.status(400).json({ error: 'Missing txBytes' });
+    return res.status(410).json({
+      error: 'Legacy sponsor relay is disabled',
+      details: {
+        migration: 'Use typed /api/actions/* endpoints or /api/battle for settlement.',
+      },
+    });
+  } catch (err: any) {
+    if (sendKnownError(err, res)) {
+      return;
     }
+    next(err);
+  }
+});
 
-    verifySponsoredTransaction(txBytes, authSession.address);
+app.post('/api/actions/mint', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const authSession = req.authSession!;
+    const { name, archetype, profession } = req.body;
     consumeBucketOrThrow(authSession.address, 'sponsor_action');
+    const result = await buildMintHeroAction(authSession.address, String(name ?? ''), Number(archetype), Number(profession));
+    return res.json(result);
+  } catch (err: any) {
+    if (sendKnownError(err, res)) {
+      return;
+    }
+    next(err);
+  }
+});
 
-    const result = await handleSponsor(txBytes);
+app.post('/api/actions/equip', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const authSession = req.authSession!;
+    const { heroId, slot, itemId } = req.body;
+    if (!heroId || !slot || !itemId) {
+      return res.status(400).json({ error: 'Missing heroId, slot, or itemId' });
+    }
+    consumeBucketOrThrow(authSession.address, 'sponsor_action');
+    const result = await buildEquipAction(authSession.address, heroId, slot, itemId);
+    return res.json(result);
+  } catch (err: any) {
+    if (sendKnownError(err, res)) {
+      return;
+    }
+    next(err);
+  }
+});
+
+app.post('/api/actions/unequip', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const authSession = req.authSession!;
+    const { heroId, slot } = req.body;
+    if (!heroId || !slot) {
+      return res.status(400).json({ error: 'Missing heroId or slot' });
+    }
+    consumeBucketOrThrow(authSession.address, 'sponsor_action');
+    const result = await buildUnequipAction(authSession.address, heroId, slot);
+    return res.json(result);
+  } catch (err: any) {
+    if (sendKnownError(err, res)) {
+      return;
+    }
+    next(err);
+  }
+});
+
+app.post('/api/actions/salvage', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const authSession = req.authSession!;
+    const { itemId } = req.body;
+    if (!itemId) {
+      return res.status(400).json({ error: 'Missing itemId' });
+    }
+    consumeBucketOrThrow(authSession.address, 'sponsor_action');
+    const result = await buildSalvageAction(authSession.address, itemId);
+    return res.json(result);
+  } catch (err: any) {
+    if (sendKnownError(err, res)) {
+      return;
+    }
+    next(err);
+  }
+});
+
+app.post('/api/actions/craft', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const authSession = req.authSession!;
+    const { recipeId, heroId, materialIds } = req.body;
+    if (recipeId === undefined || !heroId || !Array.isArray(materialIds)) {
+      return res.status(400).json({ error: 'Missing recipeId, heroId, or materialIds' });
+    }
+    consumeBucketOrThrow(authSession.address, 'sponsor_action');
+    const result = await buildCraftAction(authSession.address, Number(recipeId), heroId, materialIds);
     return res.json(result);
   } catch (err: any) {
     if (sendKnownError(err, res)) {
@@ -218,7 +311,7 @@ app.post('/api/session/loot', async (req: Request, res: Response, next: NextFunc
 // POST /api/battle — Build Tx2 settlement PTB (ADR-006, WOW #3)
 // ================================================================
 // INPUT:  { sessionId: string } + Authorization: Bearer <sessionToken>
-// OUTPUT: { txBytes: string }  (base64-encoded Tx2 PTB bytes)
+// OUTPUT: { txBytes: string, sponsorSig: string }  (base64-encoded Tx2 PTB bytes + sponsor signature)
 // ================================================================
 app.post('/api/battle', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -229,8 +322,8 @@ app.post('/api/battle', async (req: Request, res: Response, next: NextFunction) 
       return res.status(400).json({ error: 'Missing sessionId' });
     }
 
-    const txBytes = await buildBattleTx(sessionId, authSession.address);
-    return res.json({ txBytes });
+    const result = await buildBattleTx(sessionId, authSession.address);
+    return res.json(result);
   } catch (err: any) {
     if (sendKnownError(err, res)) {
       return;
@@ -276,7 +369,7 @@ app.post('/api/ai-hint', (req: Request, res: Response) => {
 // === Global error handler ===
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error('[error]', err.message);
-  res.status(500).json({ error: 'Internal server error', details: err.message });
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 // === Start ===

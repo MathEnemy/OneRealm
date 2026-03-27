@@ -8,15 +8,9 @@ const ALLOWED_TARGETS = new Set([
   `${normalizeSuiObjectId(PACKAGE_ID)}::hero::unequip_to_sender`,
   `${normalizeSuiObjectId(PACKAGE_ID)}::equipment::salvage_to_sender`,
   `${normalizeSuiObjectId(PACKAGE_ID)}::blacksmith::craft_to_sender`,
-  `${normalizeSuiObjectId(PACKAGE_ID)}::mission::settle_and_distribute`,
 ]);
 
 export function verifySponsoredTransaction(txBytes: string, expectedSender: string) {
-  const serialized = Buffer.from(txBytes, 'base64');
-  if (serialized.length > 2048) {
-    throw { status: 400, error: 'Transaction payload too large' };
-  }
-
   if (typeof txBytes !== 'string') {
     throw { status: 400, error: 'Transaction payload must be a string' };
   }
@@ -26,6 +20,9 @@ export function verifySponsoredTransaction(txBytes: string, expectedSender: stri
     txData = fromBase64(txBytes);
   } catch {
     throw { status: 400, error: 'Transaction payload must be valid base64' };
+  }
+  if (txData.length > 2048) {
+    throw { status: 400, error: 'Transaction payload too large' };
   }
   const tx = Transaction.from(txData);
   const data = tx.getData();

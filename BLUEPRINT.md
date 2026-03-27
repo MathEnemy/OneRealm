@@ -161,10 +161,9 @@ OneRealm là một *on-chain guild economy runtime* — game infrastructure cho 
       │ Game Server reads session.player + session.hero_id từ chain
       │ Game Server builds Tx2:
       │   mission::settle_and_distribute(authority, session, hero, clock="0x6")
-      │ output: base64 txBytes
+      │ output: { txBytes, sponsorSig }
       ▼
-[8] Frontend: sponsor + execute Tx2 (gasless)
-      │ → POST /api/sponsor { txBytes } + bearer auth
+[8] Frontend: execute sponsored Tx2
       │ → chainClient.executeTransactionBlock([zkSig, sponsorSig])
       │ output: txHash_2, Equipment objects về ví player
       ▼
@@ -211,14 +210,14 @@ OneRealm là một *on-chain guild economy runtime* — game infrastructure cho 
 
 ---
 
-### Error Path — Sponsor Rate Limit
+### Error Path — Sponsored Action Rate Limit
 
 ```
-[3 or 6] Frontend: POST /api/sponsor
+[3] Frontend: POST /api/actions/* hoặc [7] POST /api/battle
       │ response: HTTP 429 { error: "Rate limited" }
       ▼
-[3a or 6a] Frontend: hiển thị "Daily quest limit reached (10/day)"
-      └─ disable "Start Quest" button, show reset time (midnight)
+[3a or 7a] Frontend: hiển thị message theo bucket thực tế
+      └─ quest start, sponsor action, và server action có copy riêng
 ```
 
 ---
@@ -637,29 +636,24 @@ PSEUDOCODE:
 **Dependencies:** chain-compatible TS SDK, express, dotenv, cors
 **Được gọi bởi:** Frontend (HTTP)
 
-#### POST /api/sponsor
+#### POST /api/actions/*
 
 ```
 PSEUDOCODE:
-  1. Extract bearer token + { txBytes } từ request
-  2. Verify auth session:
-       nếu bearer invalid/expired → return 401
-  3. Verify transaction policy từ bytes:
-       - sender trong tx == authenticated address
-       - gasOwner == SPONSOR_ADDRESS
-       - đúng 1 MoveCall
-       - target thuộc allowlist sponsor
-  4. Check rate limit:
-       nếu rateLimitMap.get(address) >= SPONSOR_RATE_LIMIT_PER_DAY → return 429
-  5. Build sponsored transaction:
-       tx = Transaction.from(fromBase64(txBytes))
-       { bytes, signature } = await chainClient.signTransaction({
-         transaction: tx,
-         signer: sponsorKeypair,
-       })
-  6. Increment rate limit counter:
-       rateLimitMap.set(address, current + 1)
-  7. return { sponsoredTxBytes: bytes, sponsorSig: signature }
+  1. Extract bearer token + typed action body từ request
+  2. Verify auth session → authenticated address
+  3. Validate typed inputs + object ownership on the server
+  4. Check sponsor_action rate limit bucket
+  5. Build PTB server-side for:
+       - /api/actions/mint
+       - /api/actions/equip
+       - /api/actions/unequip
+       - /api/actions/salvage
+       - /api/actions/craft
+  6. Set sender = authenticated address
+  7. Set gasOwner = SPONSOR_ADDRESS
+  8. Build and sponsor-sign transaction
+  9. return { txBytes, sponsorSig }
 ```
 
 ---
@@ -710,9 +704,9 @@ PSEUDOCODE:
   6. Set tx metadata:
        tx.setSender(authenticatedAddress)
        tx.setGasOwner(SPONSOR_ADDRESS)
-  7. Build:
-       txBytes = await tx.build({ client: chainClient })
-  8. return { txBytes: Buffer.from(txBytes).toString("base64") }
+  7. Build txBytes = await tx.build({ client: chainClient })
+  8. Sponsor-sign txBytes with sponsor keypair
+  9. return { txBytes: Buffer.from(txBytes).toString("base64"), sponsorSig }
 ```
 
 ---
@@ -787,14 +781,16 @@ PSEUDOCODE:
 
 ---
 
-#### Gasless tx: `executeGasless(txBytes, zkAddress)`
+#### Sponsored tx execution: `executeServerAction(...)` / `buildBattleTxAndExecute(...)`
 
 ```
 PSEUDOCODE:
-  1. POST /api/sponsor { txBytes } với Authorization: Bearer <apiSessionToken>
-     → { sponsoredTxBytes, sponsorSig }
+  1. POST typed server endpoint:
+       - /api/actions/*
+       - hoặc /api/battle cho Tx2 settlement
+     → { txBytes, sponsorSig }
   2. keypair = Ed25519Keypair.fromSecretKey(sessionStorage.getItem("zkEphemKey"))
-     { signature: userSig } = await keypair.signTransaction(fromBase64(sponsoredTxBytes))
+     { signature: userSig } = await keypair.signTransaction(fromBase64(txBytes))
   3. zkProof = JSON.parse(sessionStorage.getItem("zkProof"))
      zkSig = getZkLoginSignature({
        inputs: zkProof,
@@ -802,7 +798,7 @@ PSEUDOCODE:
        userSignature: userSig,
      })
   4. return chainClient.executeTransactionBlock({
-       transactionBlock: sponsoredTxBytes,
+       transactionBlock: txBytes,
        signature: [zkSig, sponsorSig],
        options: { showEffects: true },
      })
@@ -868,8 +864,8 @@ Quest flow (click Start → result reveal):
   Total E2E       ≤ 30s (bao gồm gameplay animation 10s)
 
 Game Server API:
-  /api/sponsor    ≤ 1s  (chain signing only)
-  /api/battle     ≤ 1s  (PTB build only)
+  /api/actions/*  ≤ 1s  (validation + PTB build + sponsor sign)
+  /api/battle     ≤ 1s  (PTB build + sponsor sign)
   /api/ai-hint    ≤ 100ms (sync computation)
 ```
 
@@ -916,15 +912,15 @@ PHASE 0 — Move Foundation (Ngày 1: 09:00 - 20:00)
 
 PHASE 1 — Server & Auth (Ngày 2: 09:00 - 20:00, parallel streams)
   [1.1] game-server/chain client    — depends on: [0.6] (Package ID cần)
-  [1.2] game-server/sponsor.ts      — depends on: [1.1]
-  [1.3] game-server/battle.ts       — depends on: [1.1], [0.6]
-  [1.4] game-server/ai-hint.ts      — depends on: none (pure logic)
-  [1.5] game-server/auth.ts         — depends on: [1.1]
-  [1.6] game-server/rate-limit.ts   — depends on: none
-  [1.7] game-server/tx-policy.ts    — depends on: [1.1], [1.2]
-  [1.8] game-server/index.ts        — depends on: [1.2], [1.3], [1.4], [1.5], [1.6], [1.7]
+  [1.2] game-server/player-actions.ts — depends on: [1.1], [0.6]
+  [1.3] game-server/battle.ts         — depends on: [1.1], [0.6]
+  [1.4] game-server/ai-hint.ts        — depends on: none (pure logic)
+  [1.5] game-server/auth.ts           — depends on: [1.1]
+  [1.6] game-server/rate-limit.ts     — depends on: none
+  [1.7] game-server/tx-policy.ts      — depends on: [1.1] (legacy relay policy only)
+  [1.8] game-server/index.ts          — depends on: [1.2], [1.3], [1.4], [1.5], [1.6], [1.7]
   [1.9] frontend/auth/zklogin.ts    — depends on: none (parallel với 1.1-1.8)
-  [1.10] frontend/transactions/gasless.ts — depends on: [1.2], [1.9]
+  [1.10] frontend/transactions/gasless.ts — depends on: [1.2], [1.3], [1.9]
   Gate: Gasless mint hero hoạt động end-to-end, Google login ra OneChain address đúng
 
 PHASE 2 — Frontend Screens (Ngày 3: 09:00 - 20:00)
@@ -960,12 +956,12 @@ onerealm/
 │   ├── package.json                 ← created in [1.1]
 │   ├── .env                         ← created in [1.1] (không commit)
 │   ├── chain.ts                     ← created in [1.1]
-│   ├── sponsor.ts                   ← created in [1.2]
+│   ├── player-actions.ts            ← created in [1.2]
 │   ├── battle.ts                    ← created in [1.3]
 │   ├── ai-hint.ts                   ← created in [1.4]
 │   ├── auth.ts                      ← created in [1.5]
 │   ├── rate-limit.ts                ← created in [1.6]
-│   ├── tx-policy.ts                 ← created in [1.7]
+│   ├── tx-policy.ts                 ← created in [1.7] (legacy relay policy only)
 │   └── index.ts                     ← created in [1.8]
 │
 └── frontend/

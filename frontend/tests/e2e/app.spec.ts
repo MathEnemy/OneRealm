@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -236,8 +236,7 @@ test.beforeEach(async ({ page }) => {
           : [];
         return { data };
       },
-      async executeGasless(txBytes: string) {
-        const action = JSON.parse(atob(txBytes));
+      async executeAction(action: any) {
         if (action.target.endsWith('hero::mint_to_sender')) {
           const hero = {
             id: nextId('hero'),
@@ -324,49 +323,81 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+function createSelectors(page: Page) {
+  return {
+    loginGoogle: page.getByTestId('login-google-button'),
+    heroNameInput: page.getByTestId('hero-name-input'),
+    archetypeArcanist: page.getByTestId('hero-archetype-2'),
+    professionSmithing: page.getByTestId('hero-profession-2'),
+    mintHero: page.getByTestId('hero-mint-primary'),
+    activeHeroName: page.getByTestId('hero-active-name'),
+    activeHeroRank: page.getByTestId('hero-active-rank'),
+    startQuestFromHero: page.getByTestId('hero-start-quest'),
+    questMissionHarvest: page.getByTestId('quest-mission-1'),
+    questMissionTraining: page.getByTestId('quest-mission-2'),
+    questContractBounty: page.getByTestId('quest-contract-1'),
+    questContractExpedition: page.getByTestId('quest-contract-2'),
+    questStart: page.getByTestId('quest-start-button'),
+    questExpeditionPanel: page.getByTestId('quest-expedition-panel'),
+    questExpeditionSettle: page.getByTestId('quest-expedition-settle'),
+    questResultPanel: page.getByTestId('quest-result-panel'),
+    questResultStatus: page.getByTestId('quest-result-status'),
+    questViewInventory: page.getByTestId('quest-view-inventory'),
+    recipeScholarFocus: page.getByTestId('inventory-recipe-2'),
+    recipeScholarFocusCraft: page.getByTestId('inventory-recipe-2-craft'),
+    recipeSmithSigil: page.getByTestId('inventory-recipe-5'),
+    recipeSmithSigilProfession: page.getByTestId('inventory-recipe-5-profession'),
+    recipeSmithSigilRank: page.getByTestId('inventory-recipe-5-rank'),
+    inventoryFeedback: page.getByTestId('inventory-feedback'),
+  };
+}
+
 test('login -> mint -> quest -> craft -> expedition return', async ({ page }) => {
+  const ui = createSelectors(page);
+
   await page.goto('/');
-  await page.getByRole('button', { name: /login with google/i }).click();
+  await ui.loginGoogle.click();
   await page.waitForURL('**/hero');
 
-  await page.getByPlaceholder('Hero name...').fill('E2E Smith');
-  await page.getByRole('button', { name: /Arcanist/i }).click();
-  await page.getByRole('button', { name: /Smithing/i }).click();
-  await page.getByRole('button', { name: /Mint \(Free\)/i }).click();
+  await ui.heroNameInput.fill('E2E Smith');
+  await ui.archetypeArcanist.click();
+  await ui.professionSmithing.click();
+  await ui.mintHero.click();
 
-  await expect(page.getByText('E2E Smith')).toBeVisible();
-  await expect(page.getByText(/Rank Novice/i)).toBeVisible();
+  await expect(ui.activeHeroName).toHaveText('E2E Smith');
+  await expect(ui.activeHeroRank).toContainText('Rank Novice');
 
-  await page.getByRole('button', { name: /Start Quest/i }).click();
-  await page.getByRole('heading', { name: 'Harvest' }).click();
-  await page.getByRole('button', { name: /Bounty/i }).click();
-  await page.getByRole('button', { name: /Start Quest \(Gasless\)/i }).click();
+  await ui.startQuestFromHero.click();
+  await ui.questMissionHarvest.click();
+  await ui.questContractBounty.click();
+  await ui.questStart.click();
 
-  await expect(page.getByText(/Quest Complete!/i)).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('button', { name: /View Inventory/i }).click();
+  await expect(ui.questResultPanel).toBeVisible({ timeout: 10_000 });
+  await expect(ui.questResultStatus).toContainText('Quest Complete');
+  await ui.questViewInventory.click();
 
-  const scholarFocus = page.locator('div').filter({ hasText: 'Scholar Focus' }).first();
-  await scholarFocus.getByRole('button', { name: 'Craft' }).click();
-  await expect(page.getByText(/Crafted new gear/i)).toBeVisible();
+  await expect(ui.recipeScholarFocus).toBeVisible();
+  await ui.recipeScholarFocusCraft.click();
+  await expect(ui.inventoryFeedback).toContainText('Crafted new gear');
 
   await page.getByRole('link', { name: /Back/i }).click();
-  await expect(page.getByText(/Rank Adept/i)).toBeVisible();
+  await expect(ui.activeHeroRank).toContainText('Rank Adept');
 
-  await page.getByRole('button', { name: /Start Quest/i }).click();
-  await page.getByRole('heading', { name: 'Training' }).click();
-  await page.getByRole('button', { name: /Expedition/i }).click();
-  await page.getByRole('button', { name: /Start Quest \(Gasless\)/i }).click();
+  await ui.startQuestFromHero.click();
+  await ui.questMissionTraining.click();
+  await ui.questContractExpedition.click();
+  await ui.questStart.click();
 
-  await expect(page.getByText(/Expedition Underway/i)).toBeVisible();
-  await expect(page.getByRole('button', { name: /Waiting for Return/i })).toBeDisabled();
+  await expect(ui.questExpeditionPanel).toBeVisible();
+  await expect(ui.questExpeditionSettle).toBeDisabled();
   await page.waitForTimeout(1200);
-  await page.getByRole('button', { name: /Resolve Expedition/i }).click();
+  await ui.questExpeditionSettle.click();
 
-  await expect(page.getByText(/Quest Complete!/i)).toBeVisible({ timeout: 10_000 });
-  await page.getByRole('button', { name: /View Inventory/i }).click();
+  await expect(ui.questResultPanel).toBeVisible({ timeout: 10_000 });
+  await expect(ui.questResultStatus).toContainText('Quest Complete');
+  await ui.questViewInventory.click();
 
-  const smithSigil = page.locator('div').filter({ hasText: "Smith's Sigil" }).first();
-  await expect(smithSigil).toContainText("Smith's Sigil");
-  await expect(smithSigil).toContainText('Requires Smithing');
-  await expect(smithSigil).toContainText('Requires Adept rank');
+  await expect(ui.recipeSmithSigil).toContainText("Smith's Sigil");
+  await expect(ui.recipeSmithSigilProfession).toContainText('Requires Smithing');
+  await expect(ui.recipeSmithSigilRank).toContainText('Requires Adept rank');
 });

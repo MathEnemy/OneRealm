@@ -9,6 +9,8 @@ export default function MyApp({ Component, pageProps }: AppProps) {
       <Head>
         <title>OneRealm | GameFi Fantasy</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="shortcut icon" href="/favicon.svg" />
       </Head>
       <Layout>
         <Component {...pageProps} />

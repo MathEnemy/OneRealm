@@ -12,7 +12,17 @@
 
 - `Completed`: Wave 1 - quota semantics and error contract.
 - `Completed`: Wave 2 - durable auth sessions.
-- `Next`: Wave 3 - sponsored action hardening.
+- `Completed`: Wave 3 - sponsored action hardening.
+- `Completed`: Wave 4 - E2E contract stabilization.
+- `In progress`: Wave 5 - frontend runtime and architecture cleanup.
+- `Completed in Wave 3`: Tx2 settlement now requires authority-gated server-built battle flow and is no longer sponsor-relay allowlisted.
+- `Completed in Wave 3`: Production mint/equip/unequip/salvage/craft flows now use typed server-built sponsored actions instead of generic client-built `/api/sponsor` relay.
+- `Completed in Wave 3`: Generic `/api/sponsor` relay is now hard-disabled. Production, demo, and E2E flows no longer depend on it.
+- `Completed in Wave 4`: Login, hero mint, quest selection, expedition settle, and crafting now expose stable `data-testid` hooks consumed by Playwright.
+- `Completed in Wave 5`: zkLogin and transaction execution now lazy-load Sui runtime modules instead of pulling them into the shared app bundle.
+- `Completed in Wave 5`: Quest and inventory page helpers/UI have started moving into feature modules to reduce page-level maintenance risk.
+- `Completed in Wave 5`: Quest orchestration now lives in a dedicated `useQuestFlow` hook and inventory zones are split into loadout, arsenal, materials, and crafting sections.
+- `Next`: Continue Wave 5 by splitting more page orchestration into hooks/components while preserving current route semantics.
 
 ## Priorities
 
@@ -28,7 +38,7 @@
 
 - Replace in-memory auth sessions with signed stateless session tokens.
 - Migrate gasless production flows away from client-built PTBs toward typed server-built actions.
-- Harden legacy `/api/sponsor` verification until all production callers are migrated.
+- Remove production dependence on the generic sponsor relay and hard-disable it once migration is complete.
 - Add stable `data-testid` / `data-e2e` selector contracts for critical E2E flows.
 
 ### P2
@@ -66,13 +76,13 @@ Rollback:
 ### Wave 3 - Sponsored Action Hardening
 
 - Add typed server endpoints for mint, equip, unequip, salvage, and craft.
-- Build PTBs server-side for production flows and keep `/api/sponsor` as a legacy compatibility path.
-- Tighten `/api/sponsor` to validate per-target argument structure, object ownership, enum bounds, duplicate object IDs, and gas bounds.
+- Build PTBs server-side for production flows and remove production dependence on the generic relay.
+- Hard-disable `/api/sponsor` once production, demo, and E2E are off it.
 - Add negative tests for intentionally failing sponsored transactions.
 
 Rollback:
 
-- Leave legacy callers on `/api/sponsor` while typed endpoints roll out one flow at a time.
+- Restore the hard-disabled relay only from version control if a hidden caller is discovered after release.
 
 ### Wave 4 - E2E Contract Stabilization
 
@@ -133,8 +143,6 @@ Rollback:
 
 - `game-server/src/tx-policy.ts`
   - Tighten legacy relay validation until all callers are migrated.
-- `game-server/src/sponsor.ts`
-  - Reclassify relay usage as a compatibility path.
 - `game-server/src/session.ts`
   - Reuse server-built transaction patterns for other actions.
 - `game-server/src/battle.ts`
@@ -144,7 +152,9 @@ Rollback:
 - `frontend/pages/inventory.tsx`
   - Migrate equip, unequip, salvage, and craft to typed backend actions.
 - `frontend/lib/e2e.ts`
-  - Keep demo-mode compatibility while production flows move off client-built PTBs.
+  - Keep demo-mode compatibility while production flows move off client-built PTBs, then remove dead relay hooks.
+- `frontend/transactions/gasless.ts`
+  - Remove dead `executeGasless` relay path once all runtime callers use typed action or battle responses.
 - `game-server/src/tx-policy.test.ts`
   - Add negative coverage for malformed but allowlisted calls.
 

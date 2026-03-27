@@ -106,3 +106,21 @@ test('verifySponsoredTransaction accepts allowlisted blacksmith tx', async () =>
   verifySponsoredTransaction(toBase64(await tx.build()), '0x111');
 });
 
+test('verifySponsoredTransaction rejects settlement target from generic sponsor relay', async () => {
+  const { verifySponsoredTransaction } = await import('./tx-policy');
+
+  const tx = new Transaction();
+  tx.moveCall({
+    target: '0x9348d3e1e8fb08948bf9d31c1ee4bd7fc93526e4f0150866a14c240ed515ce26::mission::settle_and_distribute',
+    arguments: [tx.pure.u8(0), tx.pure.u8(0), tx.pure.u8(0), tx.pure.u8(0)],
+  });
+  tx.setSender('0x111');
+  tx.setGasOwner(sponsorAddress);
+  sealTx(tx);
+
+  const txBytes = toBase64(await tx.build());
+  assert.throws(
+    () => verifySponsoredTransaction(txBytes, '0x111'),
+    { status: 401 }
+  );
+});

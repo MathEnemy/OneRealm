@@ -713,36 +713,65 @@ IDEMPOTENT: KHÔNG
 
 ---
 
-### [Server] POST /api/sponsor
+### [Server] POST /api/actions/{mint|equip|unequip|salvage|craft}
 
-> Sponsor endpoint — thêm game server signature vào transaction, cho phép gasless.
+> Typed sponsored action endpoints. Game Server build PTB và sponsor-sign server-side; frontend không còn gửi raw PTB production qua generic relay.
 
 ```
-INPUT  :: {
-  txBytes: string   // base64-encoded transaction bytes
+INPUT  :: per-endpoint typed body
+
+/api/actions/mint ::
+{
+  name:        string
+  archetype:   number
+  profession:  number
+}
+
+/api/actions/equip ::
+{
+  heroId: string
+  slot:   string
+  itemId: string
+}
+
+/api/actions/unequip ::
+{
+  heroId: string
+  slot:   string
+}
+
+/api/actions/salvage ::
+{
+  itemId: string
+}
+
+/api/actions/craft ::
+{
+  recipeId:    number
+  heroId:      string
+  materialIds: string[]
 }
 
 OUTPUT :: {
-  sponsoredTxBytes: string   // base64-encoded sponsored transaction bytes
-  sponsorSig:       string   // game server signature
+  txBytes:    string   // base64-encoded sponsored transaction bytes
+  sponsorSig: string   // game server signature
 }
-       | { error: "Unauthorized" }  // khi session không hợp lệ (HTTP 401)
-       | { error: "Rate limited" }  // khi > SPONSOR_RATE_LIMIT_PER_DAY (HTTP 429)
+       | { error: "Unauthorized" }  // session không hợp lệ (HTTP 401)
+       | { error: "Rate limited", details }  // sponsor/server bucket limit (HTTP 429)
 
 SIDE EFFECTS:
-  - Increment rate limit counter cho authenticated address
+  - Consume sponsor_action bucket cho authenticated address
+  - Validate ownership và build PTB server-side
 
 PRE-CONDITIONS:
   - request có Authorization: Bearer <sessionToken> hợp lệ
-  - authenticated address chưa vượt SPONSOR_RATE_LIMIT_PER_DAY hôm nay
-  - tx.sender == authenticated address
-  - tx.gasOwner == SPONSOR_ADDRESS
-  - tx chứa đúng 1 MoveCall và target thuộc sponsor allowlist
+  - typed input hợp lệ cho endpoint tương ứng
+  - authenticated address sở hữu hero/item/materials liên quan
 
 POST-CONDITIONS:
-  - Returned bytes có đủ 2 signatures để execute on-chain
+  - Returned txBytes + sponsorSig đủ để frontend execute on-chain
 
-IDEMPOTENT: KHÔNG (counter increment)
+IDEMPOTENT: KHÔNG
 ```
 
 ---
@@ -816,10 +845,11 @@ INPUT  :: {
 }
 
 OUTPUT :: {
-  txBytes: string   // base64-encoded Tx2 settlement PTB bytes
+  txBytes:    string   // base64-encoded Tx2 settlement PTB bytes
+  sponsorSig: string   // game server signature
 }
 
-SIDE EFFECTS: none (chỉ build tx, không submit)
+SIDE EFFECTS: none on-chain (chỉ build + sponsor-sign tx, không submit)
 
 PRE-CONDITIONS:
   - sessionId tương ứng MissionSession có status == LOOT_DONE
@@ -829,6 +859,7 @@ PRE-CONDITIONS:
 
 POST-CONDITIONS:
   - Returned txBytes là valid PTB chứa `mission::settle_and_distribute`
+  - Returned payload đủ để frontend execute trực tiếp mà không cần `/api/sponsor`
 
 IDEMPOTENT: CÓ (cùng input → cùng txBytes structure, chỉ khác signature)
 ```
@@ -973,7 +1004,7 @@ FAILURES ::
 | Move error codes | `PascalCase` | `ESlotOccupied`, `ESlotEmpty` |
 | TypeScript variables | `camelCase` | `heroPower`, `sponsoredTxBytes` |
 | TypeScript types/interfaces | `PascalCase` | `HeroObject`, `SessionState` |
-| API endpoints | `kebab-case` | `/api/ai-hint`, `/api/sponsor` |
+| API endpoints | `kebab-case` | `/api/ai-hint`, `/api/actions/mint` |
 | Environment variables | `SCREAMING_SNAKE` | `SPONSOR_PRIVATE_KEY`, `ONEREALM_PACKAGE_ID` |
 
 **Domain-specific rules:**
@@ -1021,5 +1052,6 @@ RULE — address vs identity type:
 | v2.0 | 2026-03-26 | `MissionSession` | Ownership model: owned (game server) thay vì shared | CÓ | ADR-004 |
 | v2.1 | 2026-03-26 | `GameAuthority` | Thêm authority object cho server-authoritative actions | CÓ | ADR-004, ADR-006 |
 | v2.1 | 2026-03-26 | Server APIs | Thêm `/api/auth/complete`, `/api/session/create`, `/api/session/loot`; harden `/api/sponsor` | CÓ | ADR-006, ADR-008 |
+| v2.2 | 2026-03-27 | Server APIs | Thêm typed `/api/actions/*`, `/api/battle` trả `sponsorSig`, `/api/sponsor` thành legacy disabled path | CÓ | ADR-006, ADR-008 |
 | v2.1 | 2026-03-26 | Move API | Thêm `hero::unequip_to_sender`, `mission::settle_and_distribute`; Tx1 dùng `mission::generate_loot` | CÓ | ADR-002, ADR-006 |
 | 📝 | | | Thêm khi có thay đổi tiếp theo | | |

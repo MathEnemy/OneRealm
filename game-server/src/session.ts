@@ -69,7 +69,7 @@ export async function createSession(
   tx.setSender(SPONSOR_ADDRESS);
 
   // Sign and submit (Gasless relay)
-  const bytes = await withRpcRetry('create_session:build', () => tx.build({ client: suiClient }));
+  const bytes = await withRpcRetry('create_session:build', () => tx.build({ client: suiClient }), 5);
   const { signature } = await sponsorKeypair.signTransaction(bytes);
   
   const result = await withRpcRetry('create_session:execute', () => suiClient.executeTransactionBlock({
@@ -114,7 +114,7 @@ export async function grantJudgeBundle(playerAddress: string): Promise<string> {
   });
   tx.setSender(SPONSOR_ADDRESS);
 
-  const bytes = await withRpcRetry('grant_judge_bundle:build', () => tx.build({ client: suiClient }));
+  const bytes = await withRpcRetry('grant_judge_bundle:build', () => tx.build({ client: suiClient }), 5);
   const { signature } = await sponsorKeypair.signTransaction(bytes);
   const result = await withRpcRetry('grant_judge_bundle:execute', () => suiClient.executeTransactionBlock({
     transactionBlock: bytes,
@@ -165,7 +165,7 @@ export async function generateLoot(sessionId: string): Promise<string> {
     arguments: [tx.object(GAME_AUTHORITY_OBJECT_ID), tx.object('0x8'), tx.object(sessionId)],
   });
   tx.setSender(SPONSOR_ADDRESS);
-  const bytes = await withRpcRetry('generate_loot:build', () => tx.build({ client: suiClient }));
+  const bytes = await withRpcRetry('generate_loot:build', () => tx.build({ client: suiClient }), 5);
   const { signature } = await sponsorKeypair.signTransaction(bytes);
   const result = await withRpcRetry('generate_loot:execute', () => suiClient.executeTransactionBlock({
     transactionBlock: bytes,

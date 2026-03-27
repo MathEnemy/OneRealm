@@ -260,6 +260,7 @@ async function settle(sessionId, heroId) {
   tx.moveCall({
     target: target('mission', 'settle_and_distribute'),
     arguments: [
+      tx.object(AUTHORITY),
       tx.object(sessionId),
       tx.object(heroId),
       tx.object('0x6'),

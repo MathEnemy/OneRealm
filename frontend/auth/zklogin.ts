@@ -3,23 +3,11 @@
 // ADR-003: Google + zk proof auth naturally produces on-chain `address` — no OneID type needed on-chain
 // BLUEPRINT.md Section 5: startLogin() + completeLogin(jwt) specs
 
-import { SuiClient } from '@onelabs/sui/client';
-import { Ed25519Keypair } from '@onelabs/sui/keypairs/ed25519';
-import {
-  generateNonce,
-  generateRandomness,
-  getZkLoginSignature,
-  jwtToAddress,
-} from '@onelabs/sui/zklogin';
 import { e2eFetch, getE2eRuntime, getLatestSuiSystemState } from '../lib/e2e';
-import { CHAIN_RPC_URL } from '../lib/chain';
+import { getSuiClient } from '../lib/sui-runtime';
 
 const SERVER_URL = process.env.NEXT_PUBLIC_GAME_SERVER_URL ?? 'http://localhost:3001';
 const JUDGE_MODE = process.env.NEXT_PUBLIC_JUDGE_MODE === 'true';
-const suiClient = new SuiClient({
-  url: CHAIN_RPC_URL,
-});
-
 // ADR-007: hosted prover — free for devnet/testnet
 const ZK_PROVER_URL = 'https://prover-dev.mystenlabs.com/v1';
 
@@ -38,13 +26,16 @@ export async function startLogin(): Promise<void> {
   }
 
   // 1. Generate ephemeral keypair for this session
+  const { Ed25519Keypair } = await import('@onelabs/sui/keypairs/ed25519');
   const keypair = new Ed25519Keypair();
 
   // 2. Get current epoch for maxEpoch calculation
+  const suiClient = await getSuiClient();
   const { epoch } = await getLatestSuiSystemState(suiClient);
   const maxEpoch = Number(epoch) + 2;
 
   // 3. Generate randomness for nonce
+  const { generateNonce, generateRandomness } = await import('@onelabs/sui/zklogin');
   const randomness = generateRandomness();
 
   // 4. Build login nonce (embedded in Google OAuth URL)
@@ -107,6 +98,7 @@ export async function completeLogin(jwt: string): Promise<{
   const salt       = localStorage.getItem('zkSalt')!;
   const randomness = sessionStorage.getItem('zkRandomness')!;
   const maxEpoch   = Number(sessionStorage.getItem('zkMaxEpoch'));
+  const { Ed25519Keypair } = await import('@onelabs/sui/keypairs/ed25519');
   const keypair    = Ed25519Keypair.fromSecretKey(sessionStorage.getItem('zkEphemKey')!);
 
   // 2. POST to hosted prover (ADR-007: latency 2-5s — show loading spinner)
@@ -131,6 +123,7 @@ export async function completeLogin(jwt: string): Promise<{
   const proof = await proverResponse.json();
 
   // 3. Derive on-chain address from JWT + salt (ADR-003: address type)
+  const { jwtToAddress } = await import('@onelabs/sui/zklogin');
   const address = jwtToAddress(jwt, salt);
 
   // 4. Persist proof for subsequent tx signing
@@ -188,6 +181,8 @@ export async function buildZkSignature(txBytes: string): Promise<string> {
     return 'e2e-zk-signature';
   }
 
+  const { Ed25519Keypair } = await import('@onelabs/sui/keypairs/ed25519');
+  const { getZkLoginSignature } = await import('@onelabs/sui/zklogin');
   const keypair  = Ed25519Keypair.fromSecretKey(sessionStorage.getItem('zkEphemKey')!);
   const maxEpoch = Number(sessionStorage.getItem('zkMaxEpoch')!);
   const zkProof  = JSON.parse(sessionStorage.getItem('zkProof')!);

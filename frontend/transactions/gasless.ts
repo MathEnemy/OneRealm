@@ -1,18 +1,12 @@
-// gasless.ts — Gasless transaction wrapper
-// BLUEPRINT.md Section 5: executeGasless(txBytes, zkAddress) spec
-// Flow: txBytes → POST /api/sponsor → zkSign → executeTransactionBlock([zkSig, sponsorSig])
+// gasless.ts — Sponsored transaction execution helpers
+// Production flows now use typed server-built action endpoints and /api/battle.
 
-import { SuiClient } from '@onelabs/sui/client';
-import { buildZkSignature, getAuthHeaders } from '../auth/zklogin';
+import { buildZkSignature, getAuthHeaders, isDemoAuthSession } from '../auth/zklogin';
 import { e2eFetch, getE2eRuntime } from '../lib/e2e';
-import { CHAIN_RPC_URL } from '../lib/chain';
 import { getRateLimitMessage, readApiError, type RateLimitDetails } from '../lib/api-errors';
+import { getSuiClient } from '../lib/sui-runtime';
 
 const SERVER_URL   = process.env.NEXT_PUBLIC_GAME_SERVER_URL ?? 'http://localhost:3001';
-
-export const suiClient = new SuiClient({
-  url: CHAIN_RPC_URL,
-});
 
 export interface GaslessResult {
   digest: string;
@@ -20,57 +14,17 @@ export interface GaslessResult {
   objectChanges?: any[];
 }
 
-/**
- * Execute a Sui transaction gaslessly (WOW #2).
- *
- * Steps:
- *   1. POST /api/sponsor to get sponsor signature
- *   2. Build zkLogin signature from ephemeral keypair + stored proof
- *   3. Execute with [zkSig, sponsorSig] — no gas popup for user
- *
- * CONTRACTS.md: POST /api/sponsor I/O contract
- */
-export async function executeGasless(
-  txBytes:   string,
-  zkAddress: string
+async function executeSponsoredTransaction(
+  sponsoredTxBytes: string,
+  sponsorSig: string,
 ): Promise<GaslessResult> {
-  const runtime = getE2eRuntime();
-  if (runtime?.executeGasless) {
-    return runtime.executeGasless(txBytes, zkAddress);
-  }
-
-  // Step 1: Get sponsor signature (ADR-008: rate limit applies here)
-  const sponsorRes = await e2eFetch(`${SERVER_URL}/api/sponsor`, {
-    method: 'POST',
-    headers: getAuthHeaders(),
-    body: JSON.stringify({ txBytes }),
-  });
-
-  if (!sponsorRes.ok) {
-    // CONTRACTS.md error codes: 429=Rate limited, 401=Unauthorized
-    if (sponsorRes.status === 429) {
-      const apiError = await readApiError(sponsorRes, 'Rate limited');
-      throw new GaslessError('RATE_LIMITED', getRateLimitMessage(apiError.details as RateLimitDetails), apiError.details as RateLimitDetails);
-    }
-    if (sponsorRes.status === 401) {
-      const apiError = await readApiError(sponsorRes, 'Unauthorized');
-      throw new GaslessError('UNAUTHORIZED', apiError.message);
-    }
-    const apiError = await readApiError(sponsorRes, 'Unknown sponsor error');
-    throw new GaslessError('SPONSOR_FAILED', apiError.message, apiError.details as RateLimitDetails | undefined);
-  }
-
-  const { sponsoredTxBytes, sponsorSig } = await sponsorRes.json();
-
-
-
-  // Step 2: Build zkLogin signature
-  const zkSig = await buildZkSignature(sponsoredTxBytes);
-
-  // Step 3: Execute on-chain with both signatures
+  const signature = isDemoAuthSession()
+    ? sponsorSig
+    : [await buildZkSignature(sponsoredTxBytes), sponsorSig];
+  const suiClient = await getSuiClient();
   const result = await suiClient.executeTransactionBlock({
     transactionBlock: sponsoredTxBytes,
-    signature: [zkSig, sponsorSig],
+    signature,
     options: { showEffects: true, showEvents: true, showObjectChanges: true },
   });
 
@@ -81,15 +35,15 @@ export async function executeGasless(
 // ================================================================
 // buildBattleTxAndExecute — Full quest flow helper
 // ================================================================
-// Calls /api/battle to get Tx2 bytes, then executes gaslessly.
+// Calls /api/battle to get Tx2 bytes + sponsor signature, then executes it.
 // ================================================================
 export async function buildBattleTxAndExecute(
   sessionId: string,
-  playerAddress: string
+  _playerAddress: string
 ): Promise<GaslessResult> {
   const runtime = getE2eRuntime();
   if (runtime?.buildBattleTxAndExecute) {
-    return runtime.buildBattleTxAndExecute(sessionId, playerAddress);
+    return runtime.buildBattleTxAndExecute(sessionId, _playerAddress);
   }
 
   const battleRes = await e2eFetch(`${SERVER_URL}/api/battle`, {
@@ -103,8 +57,45 @@ export async function buildBattleTxAndExecute(
     throw new GaslessError('BATTLE_BUILD_FAILED', errBody.error ?? 'Failed to build Tx2');
   }
 
-  const { txBytes } = await battleRes.json();
-  return executeGasless(txBytes, playerAddress);
+  const data = await battleRes.json();
+  if (!data.sponsorSig || !data.txBytes) {
+    throw new GaslessError('BATTLE_BUILD_FAILED', 'Battle response is missing sponsored transaction data');
+  }
+  return executeSponsoredTransaction(data.txBytes, data.sponsorSig);
+}
+
+export async function executeServerAction(
+  endpoint: string,
+  body: Record<string, unknown>,
+  playerAddress: string,
+  fallbackAction?: unknown,
+): Promise<GaslessResult> {
+  const runtime = getE2eRuntime();
+  if (runtime?.executeAction && fallbackAction) {
+    return runtime.executeAction(fallbackAction, playerAddress);
+  }
+
+  const response = await e2eFetch(`${SERVER_URL}${endpoint}`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    if (response.status === 429) {
+      const apiError = await readApiError(response, 'Rate limited');
+      throw new GaslessError('RATE_LIMITED', getRateLimitMessage(apiError.details as RateLimitDetails), apiError.details as RateLimitDetails);
+    }
+    if (response.status === 401) {
+      const apiError = await readApiError(response, 'Unauthorized');
+      throw new GaslessError('UNAUTHORIZED', apiError.message);
+    }
+    const apiError = await readApiError(response, 'Failed to build sponsored action');
+    throw new GaslessError('SPONSOR_FAILED', apiError.message, apiError.details as RateLimitDetails | undefined);
+  }
+
+  const data = await response.json();
+  return executeSponsoredTransaction(data.txBytes, data.sponsorSig);
 }
 
 // ================================================================

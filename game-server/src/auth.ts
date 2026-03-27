@@ -10,13 +10,15 @@ if (!GOOGLE_CLIENT_ID) {
   throw new Error('Missing required env var: GOOGLE_CLIENT_ID');
 }
 
+const SESSION_TOKEN_SECRET: string = process.env.AUTH_SESSION_SECRET ?? '';
+
+if (!SESSION_TOKEN_SECRET) {
+  throw new Error('Missing required env var: AUTH_SESSION_SECRET');
+}
+
 const SESSION_TTL_HOURS = Number(process.env.AUTH_SESSION_TTL_HOURS ?? '12');
 const JUDGE_MODE = process.env.JUDGE_MODE === 'true';
 const DEMO_ADDRESS = normalizeSuiAddress(process.env.DEMO_PLAYER_ADDRESS ?? process.env.SPONSOR_ADDRESS ?? '');
-const SESSION_TOKEN_SECRET =
-  process.env.AUTH_SESSION_SECRET ??
-  process.env.SPONSOR_PRIVATE_KEY ??
-  GOOGLE_CLIENT_ID;
 const STATELESS_TOKEN_PREFIX = 'or1';
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 

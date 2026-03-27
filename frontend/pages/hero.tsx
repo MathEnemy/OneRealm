@@ -3,13 +3,12 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import { SuiClient } from '@onelabs/sui/client';
-import { Transaction } from '@onelabs/sui/transactions';
 import { getStoredSession } from '../auth/zklogin';
-import { executeGasless, GaslessError } from '../transactions/gasless';
-import { encodeE2eTx, e2eFetch, getDynamicFields, getE2eRuntime, getObject, getOwnedObjects } from '../lib/e2e';
+import { executeServerAction, GaslessError } from '../transactions/gasless';
+import { e2eFetch, getDynamicFields, getObject, getOwnedObjects } from '../lib/e2e';
 import { getRateLimitMessage } from '../lib/api-errors';
-import { CHAIN_LABEL, CHAIN_RPC_URL, ONEPREDICT_URL } from '../lib/chain';
+import { CHAIN_LABEL, ONEPREDICT_URL } from '../lib/chain';
+import { getSuiClient } from '../lib/sui-runtime';
 import { Button } from '../components/ui/Button';
 import { Card, Badge } from '../components/ui/Card';
 import { Banner, Spinner } from '../components/ui/Feedback';
@@ -20,7 +19,6 @@ import { StatePanel } from '../components/ui/StatePanel';
 
 const PACKAGE_ID   = process.env.NEXT_PUBLIC_ONEREALM_PACKAGE_ID!;
 const SERVER_URL   = process.env.NEXT_PUBLIC_GAME_SERVER_URL ?? 'http://localhost:3001';
-const SPONSOR_ADDRESS = process.env.NEXT_PUBLIC_SPONSOR_ADDRESS;
 const JUDGE_MODE = process.env.NEXT_PUBLIC_JUDGE_MODE === 'true';
 
 const ARCHETYPES = [
@@ -41,8 +39,6 @@ const PROFESSION_RANK_LABEL: Record<number, string> = {
   1: 'Adept',
   2: 'Master',
 };
-
-const suiClient = new SuiClient({ url: CHAIN_RPC_URL });
 
 interface HeroData {
   id: string;
@@ -92,6 +88,7 @@ function getProfessionRank(xp: number) {
 }
 
 async function loadEquipmentState(heroId: string) {
+  const suiClient = await getSuiClient();
   const dynamicFields = await getDynamicFields(suiClient, { parentId: heroId });
   let totalBonus = 0;
   let weaponEquipped = false;
@@ -134,6 +131,7 @@ export default function HeroPage() {
   async function loadHeroes(addr: string) {
     setLoading(true);
     try {
+      const suiClient = await getSuiClient();
       const { data } = await getOwnedObjects(suiClient, {
         owner: addr,
         filter: { StructType: `${PACKAGE_ID}::hero::Hero` },
@@ -186,21 +184,21 @@ export default function HeroPage() {
     setMinting(true);
     setError('');
     try {
-      if (!SPONSOR_ADDRESS && !getE2eRuntime()) throw new Error('Missing NEXT_PUBLIC_SPONSOR_ADDRESS');
-      const tx = new Transaction();
-      tx.moveCall({
-        target: `${PACKAGE_ID}::hero::mint_to_sender`,
-        arguments: [tx.pure.string(heroName.trim()), tx.pure.u8(heroArchetype), tx.pure.u8(heroProfession)],
-      });
-      tx.setSender(address);
-      tx.setGasOwner(SPONSOR_ADDRESS);
-      const txBytes = encodeE2eTx({
+      await executeServerAction(
+        '/api/actions/mint',
+        {
+          name: heroName.trim(),
+          archetype: heroArchetype,
+          profession: heroProfession,
+        },
+        address,
+        {
         target: `${PACKAGE_ID}::hero::mint_to_sender`,
         heroName: heroName.trim(),
         archetype: heroArchetype,
         profession: heroProfession,
-      }) ?? Buffer.from(await tx.build({ client: suiClient })).toString('base64');
-      await executeGasless(txBytes, address);
+        }
+      );
       setHeroName('');
       setHeroArchetype(0);
       setHeroProfession(0);
@@ -232,6 +230,7 @@ export default function HeroPage() {
         <input
           id="hero-name"
           name="hero_name"
+          data-testid="hero-name-input"
           className="input"
           style={{ width: '100%', fontSize: isFirst ? 18 : 14, padding: isFirst ? 16 : 12 }}
           placeholder="Hero name..."
@@ -252,6 +251,7 @@ export default function HeroPage() {
               selected={heroArchetype === archetype.id}
               tone="primary"
               disabled={minting}
+              data-testid={`hero-archetype-${archetype.id}`}
               style={{ padding: 12 }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15 }}>
@@ -276,6 +276,7 @@ export default function HeroPage() {
               selected={heroProfession === profession.id}
               tone="warning"
               disabled={minting}
+              data-testid={`hero-profession-${profession.id}`}
               style={{ padding: 12 }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15 }}>
@@ -292,7 +293,7 @@ export default function HeroPage() {
 
       {error && <Banner type="error">{error}</Banner>}
 
-      <Button variant={isFirst ? "primary" : "secondary"} fullWidth onClick={handleMint} disabled={minting || !heroName.trim()} style={{ padding: isFirst ? 20 : 16, fontSize: isFirst ? 18 : 14, fontWeight: 800 }}>
+      <Button variant={isFirst ? "primary" : "secondary"} fullWidth onClick={handleMint} disabled={minting || !heroName.trim()} style={{ padding: isFirst ? 20 : 16, fontSize: isFirst ? 18 : 14, fontWeight: 800 }} data-testid={isFirst ? 'hero-mint-primary' : 'hero-mint-secondary'}>
         {minting ? 'Minting…' : '✨ Mint (Free)'}
       </Button>
     </Card>
@@ -359,7 +360,7 @@ export default function HeroPage() {
                   {getArchetype(activeHero.archetype).icon}
                 </div>
                 <div>
-                  <h3 style={{ fontSize: 28, margin: '0 0 4px', fontWeight: 800 }}>{activeHero.name}</h3>
+                  <h3 style={{ fontSize: 28, margin: '0 0 4px', fontWeight: 800 }} data-testid="hero-active-name">{activeHero.name}</h3>
                   <div style={{ color: 'var(--color-accent-primary)', fontWeight: 700, fontSize: 14 }}>
                     {getArchetype(activeHero.archetype).name} • {getArchetype(activeHero.archetype).affinity}
                   </div>
@@ -378,7 +379,7 @@ export default function HeroPage() {
                    <div className="stat-value" style={{ fontSize: 20, display: 'flex', alignItems: 'center', gap: 8, lineHeight: 1.2, marginTop: 4 }}>
                      {getProfession(activeHero.profession).icon} {getProfession(activeHero.profession).name}
                    </div>
-                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>Rank {PROFESSION_RANK_LABEL[activeHero.professionRank]} • {activeHero.professionXp} XP</div>
+                   <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }} data-testid="hero-active-rank">Rank {PROFESSION_RANK_LABEL[activeHero.professionRank]} • {activeHero.professionXp} XP</div>
                  </div>
               </div>
               
@@ -393,10 +394,10 @@ export default function HeroPage() {
               
               {/* Primary Actions */}
               <div style={{ padding: 24, background: 'rgba(0,0,0,0.2)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                <Button variant="primary" style={{ flex: 1, minWidth: 200, padding: 16, fontSize: 16 }} onClick={() => router.push(`/quest?heroId=${activeHero.id}`)}>
+                <Button variant="primary" style={{ flex: 1, minWidth: 200, padding: 16, fontSize: 16 }} onClick={() => router.push(`/quest?heroId=${activeHero.id}`)} data-testid="hero-start-quest">
                   🗡 Start Quest
                 </Button>
-                <Button variant="secondary" style={{ flex: 1, minWidth: 140, padding: 16, fontSize: 16 }} onClick={() => router.push(`/inventory?heroId=${activeHero.id}`)}>
+                <Button variant="secondary" style={{ flex: 1, minWidth: 140, padding: 16, fontSize: 16 }} onClick={() => router.push(`/inventory?heroId=${activeHero.id}`)} data-testid="hero-open-inventory">
                   🎒 Inventory
                 </Button>
               </div>

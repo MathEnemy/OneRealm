@@ -13,7 +13,7 @@ export interface OneRealmE2ERuntime {
   getOwnedObjects?: (args: any) => Promise<any>;
   getObject?: (args: any) => Promise<any>;
   getDynamicFields?: (args: any) => Promise<any>;
-  executeGasless?: (txBytes: string, address: string) => Promise<E2EGaslessResult>;
+  executeAction?: (action: unknown, address: string) => Promise<E2EGaslessResult>;
   buildBattleTxAndExecute?: (sessionId: string, address: string) => Promise<E2EGaslessResult>;
 }
 
@@ -33,31 +33,6 @@ export function getE2eRuntime(): OneRealmE2ERuntime | null {
   
   if (sessionStorage.getItem('demoAuth') === 'true') {
     return {
-      executeGasless: async (txBytes: string, address: string) => {
-        const SERVER_URL = process.env.NEXT_PUBLIC_GAME_SERVER_URL ?? 'http://localhost:3001';
-        const sponsorRes = await fetch(`${SERVER_URL}/api/sponsor`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${sessionStorage.getItem('apiSessionToken')}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ txBytes }),
-        });
-        if (!sponsorRes.ok) {
-           const errBody = await sponsorRes.json().catch(()=>({}));
-           throw new Error(errBody.error || 'Sponsor failed in demo mode');
-        }
-        const { sponsoredTxBytes, sponsorSig } = await sponsorRes.json();
-        
-        const { SuiClient } = await import('@onelabs/sui/client');
-        const client = new SuiClient({ url: process.env.NEXT_PUBLIC_SUI_RPC_URL ?? 'https://rpc-testnet.onelabs.cc:443' });
-        const result = await client.executeTransactionBlock({
-          transactionBlock: sponsoredTxBytes,
-          signature: sponsorSig,
-          options: { showEffects: true, showEvents: true, showObjectChanges: true },
-        });
-        return { digest: result.digest, effects: result.effects, objectChanges: result.objectChanges };
-      },
       buildBattleTxAndExecute: async function(sessionId: string, address: string) {
         const SERVER_URL = process.env.NEXT_PUBLIC_GAME_SERVER_URL ?? 'http://localhost:3001';
         const battleRes = await fetch(`${SERVER_URL}/api/battle`, {
@@ -72,8 +47,18 @@ export function getE2eRuntime(): OneRealmE2ERuntime | null {
            const errBody = await battleRes.json().catch(()=>({}));
            throw new Error(errBody.error || 'Battle build failed in demo mode');
         }
-        const { txBytes } = await battleRes.json();
-        return this.executeGasless!(txBytes, address);
+        const { txBytes, sponsorSig } = await battleRes.json();
+        if (txBytes && sponsorSig) {
+          const { SuiClient } = await import('@onelabs/sui/client');
+          const client = new SuiClient({ url: process.env.NEXT_PUBLIC_SUI_RPC_URL ?? 'https://rpc-testnet.onelabs.cc:443' });
+          const result = await client.executeTransactionBlock({
+            transactionBlock: txBytes,
+            signature: sponsorSig,
+            options: { showEffects: true, showEvents: true, showObjectChanges: true },
+          });
+          return { digest: result.digest, effects: result.effects, objectChanges: result.objectChanges };
+        }
+        throw new Error('Battle response is missing sponsored transaction data');
       }
     };
   }
