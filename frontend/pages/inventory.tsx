@@ -51,8 +51,10 @@ export default function InventoryPage() {
     if (!router.isReady) return;
     const session = getStoredSession();
     if (!session.address || !session.hasApiSession) { router.push('/'); return; }
+    if (!heroId) { router.push('/hero'); return; }
+    
     setAddress(session.address);
-    if (heroId) loadInventory(session.address);
+    loadInventory(session.address);
   }, [router.isReady, heroId]);
 
   async function loadInventory(addr: string) {

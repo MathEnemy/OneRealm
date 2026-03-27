@@ -107,7 +107,7 @@ export async function buildBattleTx(
   tx.setSender(playerAddress);
   tx.setGasOwner(SPONSOR_ADDRESS);
 
-  const txBytes = await withRpcRetry('battle:build', () => tx.build({ client: suiClient }));
+  const txBytes = await withRpcRetry('battle:build', () => tx.build({ client: suiClient }), 10);
   const { signature } = await sponsorKeypair.signTransaction(txBytes);
 
   console.log(`[battle] Built Tx2 for player=${playerAddress}, session=${sessionId}, hero=${heroId}, mode=${settlementMode}`);
