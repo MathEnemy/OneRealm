@@ -1,10 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // Allow @mysten/sui WASM modules
-  experimental: {
-    serverComponentsExternalPackages: ['@mysten/sui'],
-  },
+  allowedDevOrigins: ['127.0.0.1'],
+  // Allow OneChain SDK WASM modules
+  serverExternalPackages: ['@onelabs/sui'],
 };
 
 module.exports = nextConfig;

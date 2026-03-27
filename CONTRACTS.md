@@ -22,6 +22,90 @@
 
 ---
 
+## Current Implementation Snapshot
+
+> Snapshot này phản ánh code hiện tại trong repo. Nếu phần cũ bên dưới còn sót enum, combat formula, hay signature cũ thì snapshot này thắng.
+
+### Hero
+
+```text
+Hero :: {
+  id             :: UID
+  name           :: vector<u8>
+  level          :: u64
+  base_power     :: u64
+  archetype      :: u8   // 0=Warrior, 1=Ranger, 2=Arcanist
+  profession     :: u8   // 0=Mining, 1=Foraging, 2=Smithing, 3=Relic Hunting
+  profession_xp  :: u64
+  owner          :: address
+}
+```
+
+### MissionSession
+
+```text
+MissionSession :: {
+  id             :: UID
+  player         :: address
+  hero_id        :: ID
+  mission_type   :: u8   // 0=Raid, 1=Harvest, 2=Training
+  contract_type  :: u8   // 0=Standard, 1=Bounty, 2=Expedition
+  ready_at_ms    :: u64  // chỉ >0 khi contract_type=Expedition
+  stance         :: u8   // 0=Balanced, 1=Aggressive, 2=Guarded
+  status         :: u8   // 0=PENDING, 1=LOOT_DONE, 2=COMPLETE, 3=FAILED
+  loot_tiers     :: vector<u8>
+  loot_types     :: vector<u8>
+  loot_affixes   :: vector<u8>
+}
+```
+
+### Live Move Entry Points
+
+```text
+hero::mint_to_sender(name, archetype, profession, ctx)
+hero::unequip_to_sender(hero, slot, ctx)
+equipment::salvage_to_sender(eq, ctx)
+blacksmith::craft_to_sender(recipe, &mut hero, mat_a, mat_b, mat_c, ctx)
+mission::generate_loot(authority, random, &mut session, ctx)
+mission::settle_and_distribute(authority, &mut session, &mut hero, &clock, ctx)
+```
+
+### Live HTTP Contracts
+
+```text
+POST /api/session/create
+  input  :: { heroId, missionType, contractType, stance }
+  output :: { sessionId, createTxDigest, readyAtMs }
+
+POST /api/session/loot
+  input  :: { sessionId }
+  output :: { tx1Digest }
+
+POST /api/battle
+  input  :: { sessionId }
+  output :: { txBytes }
+```
+
+### Progression Rules
+
+```text
+Profession rank:
+  Novice = xp 0..2
+  Adept  = xp 3..6
+  Master = xp >= 7
+
+XP gain on quest win:
+  Standard   +1
+  Bounty     +2
+  Expedition +3
+
+Base recipes: no rank requirement
+Profession recipes: require matching profession + Adept
+Master recipes: require matching profession + Master
+```
+
+---
+
 ## 1. PRIMITIVE TYPES & CONSTANTS
 
 > Các hằng số dùng xuyên suốt Move contracts và Game Server.
@@ -46,18 +130,24 @@ TYPE_GEM :: u8 = 2
   // Identifier cho gem (Target only — không dùng cho MVP)
 
 // === Mission types ===
-MISSION_FOREST :: u8 = 0
-  // Forest Quest — beginner level
+MISSION_RAID :: u8 = 0
+  // High-risk combat lane
 
-MISSION_DUNGEON :: u8 = 1
-  // Dungeon Quest — expert level
+MISSION_HARVEST :: u8 = 1
+  // Material-heavy farming lane
+
+MISSION_TRAINING :: u8 = 2
+  // Low-risk progression lane
+
+// === Contract types ===
+CONTRACT_STANDARD :: u8 = 0
+CONTRACT_BOUNTY :: u8 = 1
+CONTRACT_EXPEDITION :: u8 = 2
 
 // === Boss power thresholds ===
-BOSS_FOREST_POWER :: u64 = 20
-  // Power boss Forest — hero cần total_power > 20 để thắng (trừ seed variance)
-
-BOSS_DUNGEON_POWER :: u64 = 35
-  // Power boss Dungeon — hero cần total_power > 35 để thắng (trừ seed variance)
+BOSS_RAID_POWER :: u64 = 35
+BOSS_HARVEST_POWER :: u64 = 18
+BOSS_TRAINING_POWER :: u64 = 8
 
 // === Loot drop rates (roll range 0-99) ===
 LOOT_COMMON_MAX_ROLL  :: u8 = 59    // roll 0-59  → common  (60%)
@@ -69,10 +159,10 @@ LOOT_POWER_COMMON     :: u64 = 10   // power fixed cho common loot
 LOOT_POWER_RARE       :: u64 = 22   // power fixed cho rare loot
 LOOT_POWER_LEGENDARY  :: u64 = 40   // power fixed cho legendary loot
 
-// === Battle variance seed ===
-BATTLE_SEED_MOD :: u64 = 20
-  // seed = timestamp_ms % 20, dùng trong resolve_battle (ADR-010)
-  // Đảm bảo không predictable từ user, không manipulable
+// === Stances ===
+STANCE_BALANCED :: u8 = 0
+STANCE_AGGRESSIVE :: u8 = 1
+STANCE_GUARDED :: u8 = 2
 
 // === Hero defaults ===
 HERO_DEFAULT_LEVEL      :: u64 = 1
@@ -89,7 +179,7 @@ SPONSOR_RATE_LIMIT_PER_DAY :: u32 = 10
 > FieldName :: Type?                      — optional field (nullable)
 > FieldName :: vector<Type>               — dynamic array
 > FieldName :: Ref<SchemaName>            — reference đến schema khác
-> FieldName :: Balance<SUI>               — Sui coin balance type
+> FieldName :: Balance<NativeGas>         — native gas token balance type
 > ```
 
 ---
@@ -145,8 +235,9 @@ EquipmentType :: u8
 
 ```
 MissionType :: u8
-  | 0  // FOREST  — beginner, boss_power = BOSS_FOREST_POWER
-  | 1  // DUNGEON — expert,   boss_power = BOSS_DUNGEON_POWER
+  | 0  // RAID
+  | 1  // HARVEST
+  | 2  // TRAINING
 ```
 
 **Dùng ở:** `MissionSession.mission_type`
@@ -182,7 +273,7 @@ MissionStatus :: u8
 
 ```
 Equipment :: {
-  id         :: UID                  // Sui object ID — unique trên chain
+  id         :: UID                  // on-chain object ID — unique trên chain
   eq_type    :: EquipmentType        // xác định slot nào trên Hero nhận item này
   name       :: vector<u8>           // display name (ví dụ: b"Iron Sword")
   power      :: u64                  // stat bonus khi equipped vào Hero
@@ -215,11 +306,11 @@ LootType=1 (armor) : tier=0 → b"Iron Armor" | tier=1 → b"Rare Armor"  | tier
 
 ```
 Hero :: {
-  id          :: UID          // Sui object ID — DOF container
+  id          :: UID          // on-chain object ID — DOF container
   name        :: vector<u8>   // player-chosen hero name
   level       :: u64          // combat level (MVP: luôn = HERO_DEFAULT_LEVEL)
   base_power  :: u64          // power cơ bản, không tính equipment
-  owner       :: address      // địa chỉ ví Sui của player (off-chain OneID binding)
+  owner       :: address      // địa chỉ ví on-chain của player (off-chain identity binding)
 }
 ```
 
@@ -249,13 +340,13 @@ RANGE:     name.length ∈ [1, 32] bytes
 
 ```
 MissionSession :: {
-  id            :: UID             // Sui object ID
+  id            :: UID             // on-chain object ID
   player        :: address         // địa chỉ player tham gia session
   hero_id       :: ID              // ID của Hero object (để verify trong Tx2)
-  mission_type  :: MissionType     // FOREST hoặc DUNGEON
+  mission_type  :: MissionType     // Raid / Harvest / Training
   status        :: MissionStatus   // state machine status
-  loot_tiers    :: vector<u8>      // populated bởi loot.move trong Tx1
-  loot_types    :: vector<u8>      // populated bởi loot.move trong Tx1
+  loot_tiers    :: vector<u8>      // populated bởi mission::generate_loot trong Tx1
+  loot_types    :: vector<u8>      // populated bởi mission::generate_loot trong Tx1
 }
 ```
 
@@ -269,6 +360,25 @@ INVARIANT: status transitions chỉ được phép theo state machine trong BLUE
 
 ---
 
+### GameAuthority
+
+> Move object on-chain đóng vai trò capability cho server-authoritative actions.
+> Được tạo trong package `init` và transfer về publisher/operator address.
+
+```
+GameAuthority :: {
+  id :: UID
+}
+```
+
+**Constraints:**
+```
+INVARIANT: object này phải là owned object
+INVARIANT: chỉ holder của object này mới gọi được các server-authoritative entry points
+```
+
+---
+
 ### LootResult
 
 > Move object on-chain — wrapper output của Tx2 settlement.
@@ -278,7 +388,7 @@ INVARIANT: status transitions chỉ được phép theo state machine trong BLUE
 
 ```
 LootResult :: {
-  id           :: UID          // Sui object ID
+  id           :: UID          // on-chain object ID
   equipment    :: Equipment    // Equipment object đã craft từ loot
   mission_id   :: ID           // ID của MissionSession tương ứng
 }
@@ -297,7 +407,7 @@ GuildTarget :: {
   owner        :: address
   members      :: vector<address>   // max 20 members
   guild_level  :: u64
-  treasury     :: Balance<SUI>
+  treasury     :: Balance<NativeGas>
 }
 ```
 
@@ -407,6 +517,32 @@ IDEMPOTENT: KHÔNG
 
 ---
 
+### [Move] hero::unequip_to_sender (entry)
+
+> Wrapper an toàn cho UI gasless flow. Tháo Equipment khỏi Hero và transfer ngay về sender.
+
+```
+INPUT  :: (hero: &mut Hero, slot: vector<u8>, ctx: &TxContext)
+
+OUTPUT :: (none)
+
+SIDE EFFECTS:
+  - dof::remove(&mut hero.id, slot)
+  - Transfer Equipment về tx_context::sender(ctx)
+
+PRE-CONDITIONS:
+  - slot ∈ {SLOT_WEAPON, SLOT_ARMOR}
+  - slot phải có equipment (dof::exists_ == true) — nếu không → abort ESlotEmpty
+
+POST-CONDITIONS:
+  - dof::exists_(&hero.id, slot) == false
+  - sender nhận lại Equipment object trong ví
+
+IDEMPOTENT: KHÔNG
+```
+
+---
+
 ### [Move] hero::burn
 
 > Destroy Hero. Phải unequip tất cả slots trước khi delete (ADR-005).
@@ -433,14 +569,14 @@ IDEMPOTENT: KHÔNG
 
 ---
 
-### [Move] loot::generate_loot (entry — Tx1 TERMINAL)
+### [Move] mission::generate_loot (entry — Tx1 TERMINAL)
 
-> Generate loot ngẫu nhiên bằng Sui native randomness và commit vào MissionSession.
+> Generate loot ngẫu nhiên bằng native chain randomness và commit vào MissionSession.
 > ⚠️ CRITICAL: Entry function — không phải public. Tx1 TERMINAL (ADR-002).
-> Không có lệnh nào được chain sau function này trong cùng một transaction.
+> Trong implementation hiện tại, function này được Game Server submit vì `MissionSession` là owned object của server và call yêu cầu `&GameAuthority`.
 
 ```
-INPUT  :: (r: &Random, session: &mut MissionSession, ctx: &mut TxContext)
+INPUT  :: (authority: &GameAuthority, r: &Random, session: &mut MissionSession, ctx: &mut TxContext)
 
 OUTPUT :: (none — kết quả được ghi vào session.loot_tiers và session.loot_types)
 
@@ -450,7 +586,8 @@ SIDE EFFECTS:
   - Set session.status = MissionStatus::LOOT_DONE
 
 PRE-CONDITIONS:
-  - session.status == MissionStatus::PENDING — nếu không → abort
+  - authority hợp lệ
+  - session.status == MissionStatus::PENDING — nếu không → abort ELootAlreadyDone
 
 POST-CONDITIONS:
   - session.loot_tiers.length ∈ [1, 3]
@@ -505,9 +642,11 @@ IDEMPOTENT: KHÔNG
 
 **Battle resolution algorithm (ADR-010):**
 ```
-boss_power = get_boss_power(session.mission_type)
-seed = clock::timestamp_ms(clock) % BATTLE_SEED_MOD
-win = (hero_power + seed) > boss_power
+boss_power   = get_boss_power(session.mission_type, session.contract_type)
+stance_bonus = get_stance_bonus(session.mission_type, session.stance)
+if session.contract_type == CONTRACT_EXPEDITION:
+  assert clock::timestamp_ms(clock) >= session.ready_at_ms
+win = (hero_power + stance_bonus) > boss_power
 ```
 
 ---
@@ -537,14 +676,50 @@ IDEMPOTENT: KHÔNG
 
 ---
 
+### [Move] mission::settle_and_distribute
+
+> Public wrapper duy nhất cho flow runtime hiện tại.
+> Function này tự bind session với hero/player và tự tính `hero::total_power(hero)` on-chain.
+
+```
+INPUT  :: (
+  authority: &GameAuthority,
+  session:   &mut MissionSession,
+  hero:      &Hero,
+  clock:     &Clock,
+  ctx:       &mut TxContext
+)
+
+OUTPUT :: (none)
+
+SIDE EFFECTS:
+  - Verify tx_context::sender(ctx) == session.player
+  - Verify object::id(hero) == session.hero_id
+  - Internally call mission::settle(...)
+  - Transfer rewards về sender qua mission::distribute(...)
+
+PRE-CONDITIONS:
+  - authority hợp lệ
+  - session.status == MissionStatus::LOOT_DONE
+  - hero phải đúng hero đã bind vào session
+  - sender phải đúng player đã bind vào session
+
+POST-CONDITIONS:
+  - session.status ∈ {MissionStatus::COMPLETE, MissionStatus::FAILED}
+  - Nếu win, sender nhận Equipment rewards trong ví
+
+IDEMPOTENT: KHÔNG
+```
+
+---
+
 ### [Server] POST /api/sponsor
 
 > Sponsor endpoint — thêm game server signature vào transaction, cho phép gasless.
 
 ```
 INPUT  :: {
-  txBytes:       string   // base64-encoded transaction bytes
-  senderAddress: string   // địa chỉ Sui của player (zkLogin address)
+  txBytes: string   // base64-encoded transaction bytes
 }
 
 OUTPUT :: {
@@ -555,16 +730,78 @@ OUTPUT :: {
        | { error: "Rate limited" }  // khi > SPONSOR_RATE_LIMIT_PER_DAY (HTTP 429)
 
 SIDE EFFECTS:
-  - Increment rate limit counter cho senderAddress
+  - Increment rate limit counter cho authenticated address
 
 PRE-CONDITIONS:
-  - senderAddress có valid zkLogin session
-  - senderAddress chưa vượt SPONSOR_RATE_LIMIT_PER_DAY hôm nay
+  - request có Authorization: Bearer <sessionToken> hợp lệ
+  - authenticated address chưa vượt SPONSOR_RATE_LIMIT_PER_DAY hôm nay
+  - tx.sender == authenticated address
+  - tx.gasOwner == SPONSOR_ADDRESS
+  - tx chứa đúng 1 MoveCall và target thuộc sponsor allowlist
 
 POST-CONDITIONS:
   - Returned bytes có đủ 2 signatures để execute on-chain
 
 IDEMPOTENT: KHÔNG (counter increment)
+```
+
+---
+
+### [Server] POST /api/auth/complete
+
+> Hoàn tất server-side auth session sau khi frontend đã có Google ID token + on-chain address từ zk proof auth.
+
+```
+INPUT  :: {
+  idToken:   string
+  address:   string
+  userSalt:  string
+}
+
+OUTPUT :: {
+  address:       string
+  expiresAt:     number
+  sessionToken:  string
+}
+
+SIDE EFFECTS:
+  - Verify Google ID token
+  - Recompute jwtToAddress(idToken, userSalt)
+  - Tạo auth session in-memory
+```
+
+---
+
+### [Server] POST /api/session/create
+
+> Tạo MissionSession owned bởi sponsor/game server address.
+
+```
+INPUT  :: {
+  heroId:       string
+  missionType:  MissionType
+}
+
+OUTPUT :: {
+  sessionId:        string
+  createTxDigest:   string
+}
+```
+
+---
+
+### [Server] POST /api/session/loot
+
+> Server self-submit Tx1 để commit loot vào session.
+
+```
+INPUT  :: {
+  sessionId: string
+}
+
+OUTPUT :: {
+  tx1Digest: string
+}
 ```
 
 ---
@@ -575,9 +812,7 @@ IDEMPOTENT: KHÔNG (counter increment)
 
 ```
 INPUT  :: {
-  sessionId:     string   // Sui object ID của MissionSession (từ Tx1 result)
-  heroId:        string   // Sui object ID của Hero
-  playerAddress: string   // địa chỉ Sui của player
+  sessionId: string   // object ID của MissionSession
 }
 
 OUTPUT :: {
@@ -588,20 +823,20 @@ SIDE EFFECTS: none (chỉ build tx, không submit)
 
 PRE-CONDITIONS:
   - sessionId tương ứng MissionSession có status == LOOT_DONE
-  - heroId là Hero owned bởi playerAddress
+  - request có Authorization: Bearer <sessionToken> hợp lệ
+  - session.player phải match authenticated address
+  - heroId được derive từ session.hero_id trên chain
 
 POST-CONDITIONS:
-  - Returned txBytes là valid PTB chứa: hero::total_power → mission::settle → mission::distribute
+  - Returned txBytes là valid PTB chứa `mission::settle_and_distribute`
 
 IDEMPOTENT: CÓ (cùng input → cùng txBytes structure, chỉ khác signature)
 ```
 
 **Tx2 PTB structure:**
 ```
-[1] hero::total_power(heroId) → heroPower
-[2] mission::settle(sessionId, heroPower, "0x6") → rewards
-[3] mission::distribute(rewards, playerAddress)
-setSender(playerAddress)
+[1] mission::settle_and_distribute(GAME_AUTHORITY_OBJECT_ID, sessionId, heroId_from_session, "0x6")
+setSender(authenticatedAddress)
 setGasOwner(SPONSOR_ADDRESS)
 ```
 
@@ -620,7 +855,7 @@ INPUT  :: {
 OUTPUT :: {
   hint:               string   // human-readable hint text
   readiness:          number   // 0-100, percentage
-  recommended_quest:  string   // "forest" hoặc "training"
+  recommended_quest:  string   // "raid" | "harvest" | "training"
 }
 
 SIDE EFFECTS: none
@@ -631,7 +866,9 @@ PRE-CONDITIONS:
 
 POST-CONDITIONS:
   - readiness = min(100, round((heroPower / 50) * 100))
-  - recommended_quest = "forest" nếu readiness >= 70, ngược lại "training"
+  - recommended_quest = "raid" nếu readiness >= 70
+  - recommended_quest = "harvest" nếu readiness >= 40 và < 70
+  - recommended_quest = "training" nếu readiness < 40
 
 IDEMPOTENT: CÓ
 ```
@@ -646,11 +883,16 @@ IDEMPOTENT: CÓ
 |---|---|---|---|
 | `ESlotOccupied` (0) | — | `hero::equip` khi slot đã có equipment | `hero_id`, `slot` |
 | `ESlotEmpty` (1) | — | `hero::unequip` khi slot không có equipment | `hero_id`, `slot` |
+| `EInvalidSlot` (2) | — | `hero::equip` / `hero::unequip` khi slot không hợp lệ | `hero_id`, `slot` |
+| `ETypeMismatch` (3) | — | `hero::equip` khi item không khớp slot | `hero_id`, `slot`, `eq_id` |
 | `EInvalidStatus` (0) | — | `mission::add_loot` khi `status != PENDING` | `session_id`, `current_status` |
 | `ESettleBeforeLoot` (1) | — | `mission::settle` khi `status != LOOT_DONE` | `session_id`, `current_status` |
+| `ELootAlreadyDone` (3) | — | `mission::generate_loot` khi session không còn `PENDING` | `session_id`, `current_status` |
+| `EHeroMismatch` (4) | — | `mission::settle_and_distribute` khi hero không match session.hero_id | `session_id`, `hero_id` |
+| `EPlayerMismatch` (5) | — | `mission::settle_and_distribute` khi sender không match session.player | `session_id`, `player` |
 | `EGemOnly` (0) | — | `equipment::attach_gem` khi item không phải gem (eq_type != 2) | `eq_id`, `eq_type` |
-| `Unauthorized` | 401 | `/api/sponsor` — invalid zkLogin session | `senderAddress` |
-| `RateLimited` | 429 | `/api/sponsor` — vượt SPONSOR_RATE_LIMIT_PER_DAY | `senderAddress`, `count_today` |
+| `Unauthorized` | 401 | protected APIs với bearer invalid/expired hoặc tx policy mismatch | `address`, `tx_sender?` |
+| `RateLimited` | 429 | sponsor/session endpoints vượt SPONSOR_RATE_LIMIT_PER_DAY | `address`, `count_today` |
 
 > **Move error format:** `abort(ErrorCode)` — không có message trong MVP.
 > **Server error format:**
@@ -666,7 +908,7 @@ IDEMPOTENT: CÓ
 
 ---
 
-### Mysten Hosted ZK Prover (`prover-dev.mystenlabs.com`)
+### Hosted ZK Prover (`prover-dev.mystenlabs.com`)
 
 ```
 // Hệ thống gọi với:
@@ -683,7 +925,7 @@ REQUEST :: POST https://prover-dev.mystenlabs.com/v1
 
 // Expect response:
 RESPONSE :: {
-  proofPoints:      object   // ZK proof data để build zkLogin signature
+  proofPoints:      object   // ZK proof data để build on-chain login signature
   issBase64Details: object
   headerBase64:     string
 }
@@ -698,18 +940,18 @@ FAILURES ::
 
 ---
 
-### Sui RPC (fullnode.devnet.sui.io)
+### OneChain RPC (`rpc-testnet.onelabs.cc`)
 
 ```
 // Hệ thống dùng để:
 OPERATIONS ::
-  | getLatestSuiSystemState()     → { epoch: string } (dùng cho zkLogin nonce)
+  | getLatestSystemState()        → { epoch: string } (dùng cho login nonce)
   | executeTransactionBlock(...)  → tx result với effects
   | getObject(objectId)           → object data
 
 // Clock Object:
 CLOCK_OBJECT_ID :: string = "0x6"
-  // Sui system clock object — luôn available, không cần query
+  // system clock object — luôn available, không cần query
 
 FAILURES ::
   | TIMEOUT → retry với exponential backoff (base 500ms, cap 5s, max 3 retries)
@@ -726,8 +968,8 @@ FAILURES ::
 |---|---|---|
 | Move module names | `snake_case` | `onerealm::hero`, `onerealm::mission` |
 | Move struct names | `PascalCase` | `Hero`, `Equipment`, `MissionSession` |
-| Move function names | `snake_case` | `mint_to_sender`, `generate_loot`, `resolve_battle` |
-| Move constants | `SCREAMING_SNAKE` | `SLOT_WEAPON`, `BOSS_FOREST_POWER` |
+| Move function names | `snake_case` | `mint_to_sender`, `generate_loot`, `settle_and_distribute` |
+| Move constants | `SCREAMING_SNAKE` | `SLOT_WEAPON`, `BOSS_RAID_POWER` |
 | Move error codes | `PascalCase` | `ESlotOccupied`, `ESlotEmpty` |
 | TypeScript variables | `camelCase` | `heroPower`, `sponsoredTxBytes` |
 | TypeScript types/interfaces | `PascalCase` | `HeroObject`, `SessionState` |
@@ -741,9 +983,9 @@ RULE — "entry vs public" trong Move:
   entry fun  → Tx1 terminal function (có Random input) — KHÔNG gọi từ PTB
   public fun → Có thể gọi từ PTB — settlement functions
 
-  ✅ entry fun generate_loot(r: &Random, ...)    — Tx1 terminal
-  ❌ public fun generate_loot(r: &Random, ...)   — Sui protocol từ chối
-  ✅ public fun settle(session: &mut MissionSession, ...)  — Tx2 trong PTB
+  ✅ entry fun mission::generate_loot(&GameAuthority, &Random, ...) — Tx1 terminal
+  ❌ public fun generate_loot(r: &Random, ...)                      — protocol từ chối
+  ✅ public fun settle_and_distribute(...)                          — Tx2 wrapper trong PTB
 ```
 
 ```
@@ -777,4 +1019,7 @@ RULE — address vs identity type:
 | v2.0 | 2026-03-26 | `Hero` | Remove `signer` param → thêm `owner: address` field | CÓ | ADR-001, ADR-003 |
 | v2.0 | 2026-03-26 | `MissionSession` | Thêm `status: MissionStatus` field | CÓ | ADR-004 |
 | v2.0 | 2026-03-26 | `MissionSession` | Ownership model: owned (game server) thay vì shared | CÓ | ADR-004 |
+| v2.1 | 2026-03-26 | `GameAuthority` | Thêm authority object cho server-authoritative actions | CÓ | ADR-004, ADR-006 |
+| v2.1 | 2026-03-26 | Server APIs | Thêm `/api/auth/complete`, `/api/session/create`, `/api/session/loot`; harden `/api/sponsor` | CÓ | ADR-006, ADR-008 |
+| v2.1 | 2026-03-26 | Move API | Thêm `hero::unequip_to_sender`, `mission::settle_and_distribute`; Tx1 dùng `mission::generate_loot` | CÓ | ADR-002, ADR-006 |
 | 📝 | | | Thêm khi có thay đổi tiếp theo | | |

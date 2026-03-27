@@ -1,10 +1,13 @@
-'use client';
-// pages/index.tsx — Login Screen (WOW #1: Google → Sui address)
-// Phase [2.1] — BLUEPRINT.md: zkLogin flow + OAuth callback handler
+// pages/index.tsx — Login Screen (WOW #1: Google → OneChain address)
+// Phase [2.1] — BLUEPRINT.md: Google + zk proof auth flow + OAuth callback handler
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import { startLogin, completeLogin, getStoredSession } from '../auth/zklogin';
+import Link from 'next/link';
+import { startLogin, completeLogin, getStoredSession, startDemoLogin } from '../auth/zklogin';
+import { CHAIN_LABEL } from '../lib/chain';
+
+const JUDGE_MODE = process.env.NEXT_PUBLIC_JUDGE_MODE === 'true';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -24,7 +27,7 @@ export default function LoginPage() {
 
     // If already logged in, redirect to hero screen
     const session = getStoredSession();
-    if (session.address && session.hasProof) {
+    if (session.address && session.hasApiSession && (session.hasProof || JUDGE_MODE)) {
       router.push('/hero');
     }
   }, []);
@@ -54,20 +57,40 @@ export default function LoginPage() {
     }
   }
 
+  async function handleJudgeMode() {
+    setStatus('loading');
+    setErrorMsg('');
+    try {
+      await startDemoLogin();
+      router.push('/hero');
+    } catch (err: any) {
+      setStatus('error');
+      setErrorMsg(err.message ?? 'Judge mode login failed.');
+    }
+  }
+
   return (
     <main style={styles.container}>
       <div style={styles.card}>
         {/* Logo & Title */}
         <div style={styles.logo}>⚔️</div>
         <h1 style={styles.title}>OneRealm</h1>
-        <p style={styles.subtitle}>On-chain guild economy. Play with Google. Own your loot.</p>
+        <p style={styles.subtitle}>GameFi fantasy economy on {CHAIN_LABEL}. Play with Google. Own your loot.</p>
 
         {/* Auth states */}
         {status === 'idle' && (
-          <button onClick={handleLogin} style={styles.googleBtn}>
-            <span style={{ marginRight: 10 }}>🔑</span>
-            Login with Google
-          </button>
+          <>
+            <button onClick={handleLogin} style={styles.googleBtn}>
+              <span style={{ marginRight: 10 }}>🔑</span>
+              Login with Google
+            </button>
+            {JUDGE_MODE && (
+              <button onClick={handleJudgeMode} style={styles.demoBtn}>
+                <span style={{ marginRight: 10 }}>⚡</span>
+                Enter Judge Mode
+              </button>
+            )}
+          </>
         )}
 
         {status === 'loading' && (
@@ -103,6 +126,9 @@ export default function LoginPage() {
             <span>🏆</span><span>Equipment truly owned on-chain</span>
           </div>
         </div>
+        <Link href="/about" style={styles.aboutLink}>
+          Why this fits OneHack →
+        </Link>
       </div>
     </main>
   );
@@ -139,6 +165,14 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     transition: 'transform 0.2s',
   },
+  demoBtn: {
+    width: '100%', padding: '16px 24px',
+    background: 'rgba(255,255,255,0.08)',
+    color: '#fff', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 12,
+    fontSize: 16, fontWeight: 700, cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    transition: 'transform 0.2s', marginTop: 12,
+  },
   loadingBox: { padding: '24px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 },
   spinner: {
     width: 40, height: 40,
@@ -158,4 +192,12 @@ const styles: Record<string, React.CSSProperties> = {
   },
   features: { marginTop: 36, display: 'flex', flexDirection: 'column', gap: 12 },
   feature:  { display: 'flex', gap: 10, alignItems: 'center', color: 'rgba(255,255,255,0.6)', fontSize: 14 },
+  aboutLink: {
+    display: 'inline-block',
+    marginTop: 28,
+    color: '#c4b5fd',
+    fontSize: 14,
+    textDecoration: 'none',
+    fontWeight: 700,
+  },
 };

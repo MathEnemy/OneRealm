@@ -2,7 +2,29 @@
 # This file should be checked in.
 
 [move]
-version = 4
+version = 3
+manifest_digest = "3E11FFCCBE0C8F8A629C5D4D61E284BAA731C2C39103E910EF31415C9FE29A1F"
+deps_digest = "F8BBB0CCB2491CA29A3DF03D6F92277A4F3574266507ACD77214D37ECA3F3082"
+dependencies = [
+  { id = "One", name = "One" },
+]
+
+[[move.package]]
+id = "MoveStdlib"
+source = { git = "https://github.com/one-chain-labs/onechain.git", rev = "main", subdir = "crates/sui-framework/packages/move-stdlib" }
+
+[[move.package]]
+id = "One"
+source = { git = "https://github.com/one-chain-labs/onechain.git", rev = "main", subdir = "crates/sui-framework/packages/one-framework" }
+
+dependencies = [
+  { id = "MoveStdlib", name = "MoveStdlib" },
+]
+
+[move.toolchain-version]
+compiler-version = "1.1.1"
+edition = "2024.beta"
+flavor = "one"
 
 [pinned.testnet.MoveStdlib]
 source = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/move-stdlib", rev = "03cf0fbaa21f4697ba40b17ff0cfb58377a50a45" }
@@ -21,3 +43,11 @@ source = { root = true }
 use_environment = "testnet"
 manifest_digest = "DEE42C89BB3F8EC67C17BC4AE0CEBE14A28F4FA787E857046EAF0FA38D556496"
 deps = { Sui = "Sui" }
+
+[env]
+
+[env.testnet]
+chain-id = "1bd5c965"
+original-published-id = "0x0a9132c81733a3801ccf0866df65722966062a197ff74a7b511be619449d786a"
+latest-published-id = "0x0a9132c81733a3801ccf0866df65722966062a197ff74a7b511be619449d786a"
+published-version = "1"

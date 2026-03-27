@@ -2,20 +2,21 @@
 // BLUEPRINT.md Section 5: executeGasless(txBytes, zkAddress) spec
 // Flow: txBytes → POST /api/sponsor → zkSign → executeTransactionBlock([zkSig, sponsorSig])
 
-import { SuiClient } from '@mysten/sui/client';
-import { fromBase64 } from '@mysten/sui/utils';
-import { buildZkSignature } from '../auth/zklogin';
+import { SuiClient } from '@onelabs/sui/client';
+import { buildZkSignature, getAuthHeaders, isDemoAuthSession } from '../auth/zklogin';
+import { e2eFetch, getE2eRuntime } from '../lib/e2e';
+import { CHAIN_RPC_URL } from '../lib/chain';
 
-const SUI_NETWORK  = process.env.NEXT_PUBLIC_SUI_NETWORK ?? 'devnet';
 const SERVER_URL   = process.env.NEXT_PUBLIC_GAME_SERVER_URL ?? 'http://localhost:3001';
 
 export const suiClient = new SuiClient({
-  url: `https://fullnode.${SUI_NETWORK}.sui.io`,
+  url: CHAIN_RPC_URL,
 });
 
 export interface GaslessResult {
   digest: string;
   effects: any;
+  objectChanges?: any[];
 }
 
 /**
@@ -32,11 +33,16 @@ export async function executeGasless(
   txBytes:   string,
   zkAddress: string
 ): Promise<GaslessResult> {
+  const runtime = getE2eRuntime();
+  if (runtime?.executeGasless) {
+    return runtime.executeGasless(txBytes, zkAddress);
+  }
+
   // Step 1: Get sponsor signature (ADR-008: rate limit applies here)
-  const sponsorRes = await fetch(`${SERVER_URL}/api/sponsor`, {
+  const sponsorRes = await e2eFetch(`${SERVER_URL}/api/sponsor`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ txBytes, senderAddress: zkAddress }),
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ txBytes }),
   });
 
   if (!sponsorRes.ok) {
@@ -53,6 +59,15 @@ export async function executeGasless(
 
   const { sponsoredTxBytes, sponsorSig } = await sponsorRes.json();
 
+  if (isDemoAuthSession()) {
+    const result = await suiClient.executeTransactionBlock({
+      transactionBlock: sponsoredTxBytes,
+      signature: sponsorSig,
+      options: { showEffects: true, showEvents: true, showObjectChanges: true },
+    });
+    return { digest: result.digest, effects: result.effects, objectChanges: result.objectChanges };
+  }
+
   // Step 2: Build zkLogin signature
   const zkSig = await buildZkSignature(sponsoredTxBytes);
 
@@ -60,11 +75,11 @@ export async function executeGasless(
   const result = await suiClient.executeTransactionBlock({
     transactionBlock: sponsoredTxBytes,
     signature: [zkSig, sponsorSig],
-    options: { showEffects: true, showEvents: true },
+    options: { showEffects: true, showEvents: true, showObjectChanges: true },
   });
 
   console.log('[gasless] Tx executed:', result.digest);
-  return { digest: result.digest, effects: result.effects };
+  return { digest: result.digest, effects: result.effects, objectChanges: result.objectChanges };
 }
 
 // ================================================================
@@ -73,14 +88,18 @@ export async function executeGasless(
 // Calls /api/battle to get Tx2 bytes, then executes gaslessly.
 // ================================================================
 export async function buildBattleTxAndExecute(
-  sessionId:     string,
-  heroId:        string,
+  sessionId: string,
   playerAddress: string
 ): Promise<GaslessResult> {
-  const battleRes = await fetch(`${SERVER_URL}/api/battle`, {
+  const runtime = getE2eRuntime();
+  if (runtime?.buildBattleTxAndExecute) {
+    return runtime.buildBattleTxAndExecute(sessionId, playerAddress);
+  }
+
+  const battleRes = await e2eFetch(`${SERVER_URL}/api/battle`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, heroId, playerAddress }),
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ sessionId }),
   });
 
   if (!battleRes.ok) {

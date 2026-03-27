@@ -12,7 +12,7 @@
 ## Mục lục
 
 - [Cách đọc file này](#cách-đọc-file-này)
-- [ADR-001](#adr-001----sui-move-syntax--không-dùng-aptos-move) 🔴
+- [ADR-001](#adr-001----onechain-move-syntax--không-dùng-aptos-move) 🔴
 - [ADR-002](#adr-002----2-transaction-session-pattern) 🔴
 - [ADR-003](#adr-003----address-on-chain--không-dùng-oneiduser-type) 🔴
 - [ADR-004](#adr-004----missionsession-là-owned-object) 🟠
@@ -23,6 +23,10 @@
 - [ADR-009](#adr-009----feature-budget-4-move-modules--4-screens) 🔴
 - [ADR-010](#adr-010----deterministic-battle-resolution) 🟠
 - [ADR-011](#adr-011----mock-ai-mentor-cho-mvp) 🟡
+- [ADR-012](#adr-012----reward-model-shift-sang-materials--crafting) 🟠
+- [ADR-013](#adr-013----mission-families--contract-types) 🟠
+- [ADR-014](#adr-014----hero-archetype--profession-progression) 🟠
+- [ADR-015](#adr-015----blacksmith-tech-tree-theo-profession-rank) 🟠
 - [Weight Decay Tracker](#weight-decay-tracker)
 - [Superseded Decisions từ v1.0](#superseded-decisions-từ-v10)
 - [Index](#index)
@@ -43,7 +47,7 @@ Khi weight < 0.5 → re-evaluate. Reset về 1.0 khi re-apply.
 
 ---
 
-## ADR-001 — Sui Move Syntax — Không dùng Aptos Move
+## ADR-001 — OneChain Move Syntax — Không dùng Aptos Move
 
 **Status:** ✅ ACCEPTED
 **Level:** 🔴 MANDATORY
@@ -53,52 +57,52 @@ Khi weight < 0.5 → re-evaluate. Reset về 1.0 khi re-apply.
 
 ### Context
 
-Tech Spec v1.0 dùng Aptos Move syntax: `signer` parameter, `object::ID` (không phải `UID`), `object::DynamicFields<T>` như struct field. Tất cả những syntax này compile fail 100% trên Sui Move VM — hai ngôn ngữ tuy cùng tên "Move" nhưng có type system và runtime khác nhau.
+Tech Spec v1.0 dùng Aptos Move syntax: `signer` parameter, `object::ID` (không phải `UID`), `object::DynamicFields<T>` như struct field. Tất cả những syntax này compile fail 100% trên OneChain Move runtime — hai ngôn ngữ tuy cùng tên "Move" nhưng có type system và runtime khác nhau.
 
 **Constraints:**
-- Project build trên OneChain (Sui-based) — phải dùng Sui Move, không phải Aptos Move
-- Mọi Move code phải pass `sui move build` trước khi có thể test hoặc deploy
+- Project build trên OneChain (Move-compatible object runtime) — phải dùng OneChain Move, không phải Aptos Move
+- Mọi Move code phải pass `one move build` trước khi có thể test hoặc deploy
 
 ### Options Considered
 
-#### Option A: Rewrite toàn bộ sang Sui Move syntax ← **CHOSEN**
+#### Option A: Rewrite toàn bộ sang OneChain Move syntax ← **CHOSEN**
 
 | Pros | Cons |
 |---|---|
 | Compile và run được | Cần rewrite hoàn toàn v1.0 code |
-| Consistent với Sui official docs và examples | - |
+| Consistent với OneChain docs và Move-compatible examples | - |
 | `UID`, `TxContext`, `dof::add` — đúng API | - |
 
-#### Option B: Giữ Aptos syntax, dùng Aptos chain thay vì Sui-based
+#### Option B: Giữ Aptos syntax, dùng Aptos chain thay vì OneChain-compatible runtime
 
 | Pros | Cons |
 |---|---|
-| Không cần rewrite | OneChain là Sui-based — không thể dùng Aptos chain |
-| - | Phá vỡ toàn bộ integration với Sui SDK, zkLogin, Mysticeti |
+| Không cần rewrite | OneChain là Move object-chain compatible — không thể dùng Aptos chain |
+| - | Phá vỡ toàn bộ integration với chain SDK, zk proof auth, sponsored PTB flow |
 
-**Loại vì:** OneChain là Sui-based — bắt buộc dùng Sui Move.
+**Loại vì:** OneChain runtime tương thích object-centric Move — bắt buộc dùng cú pháp tương thích runtime đó.
 
 ### Decision
 
-> **Chọn Option A vì:** OneChain chạy Sui VM. Aptos Move và Sui Move có syntax khác nhau đủ để không thể cross-compile. Không có lựa chọn nào khác.
+> **Chọn Option A vì:** OneChain chạy object-centric Move runtime. Aptos Move và runtime này khác nhau đủ để không thể cross-compile. Không có lựa chọn nào khác.
 
 ### Consequences
 
 **Tích cực:**
 - Code compile và deploy được
-- Có thể reference Sui official docs, examples, và Blackjack-Sui reference implementation
+- Có thể reference OneChain docs và các examples Move-compatible cùng mô hình object
 
 **Tiêu cực / Trade-offs:**
-- Phải rewrite toàn bộ v1.0 Move code — sẽ revisit nếu có breaking changes trong Sui Move
+- Phải rewrite toàn bộ v1.0 Move code — sẽ revisit nếu có breaking changes trong runtime tương thích
 
 **Key syntax changes áp dụng:**
 
 ```
-Aptos                          → Sui Move
+Aptos                          → OneChain Move
 ──────────────────────────────────────────
 signer                         → &mut TxContext
-object::ID                     → sui::object::UID
-object::DynamicFields<T>       → sui::dynamic_object_field as dof
+object::ID                     → object runtime UID
+object::DynamicFields<T>       → dynamic_object_field as dof
 struct Hero has key { ... }    → public struct Hero has key { ... }
 ```
 
@@ -116,12 +120,12 @@ struct Hero has key { ... }    → public struct Hero has key { ... }
 
 ### Context
 
-Architecture v1.0 spec "1 PTB = full session": generate loot + battle resolve + reward distribute trong một transaction. Không thể implement vì Sui protocol có security constraint về `Random` input.
+Architecture v1.0 spec "1 PTB = full session": generate loot + battle resolve + reward distribute trong một transaction. Không thể implement vì chain protocol có security constraint về `Random` input.
 
 **Constraints:**
-- Sui protocol reject PTB có bất kỳ lệnh non-transfer nào sau `MoveCall` dùng `Random` làm input
-- Đây là intentional Sui design để prevent front-running attacks
-- Loot generation phải dùng `sui::random::Random` để unmanipulable
+- Chain protocol reject PTB có bất kỳ lệnh non-transfer nào sau `MoveCall` dùng `Random` làm input
+- Đây là intentional protocol design để prevent front-running attacks
+- Loot generation phải dùng native `Random` để unmanipulable
 
 ### Options Considered
 
@@ -129,31 +133,31 @@ Architecture v1.0 spec "1 PTB = full session": generate loot + battle resolve + 
 
 | Pros | Cons |
 |---|---|
-| Sui protocol chấp nhận | Cần 2 round-trips thay vì 1 |
+| Protocol chấp nhận | Cần 2 round-trips thay vì 1 |
 | Loot committed on-chain trước settlement — minh bạch hơn | Frontend phải wait Tx1 confirm rồi mới build Tx2 |
 | Settlement (Tx2) vẫn là 1 atomic PTB | Game Server cần thêm logic build Tx2 |
 
 #### Option B: Single PTB với randomness
 
-**Loại vì:** Sui protocol từ chối ở validation stage — không thể ship.
+**Loại vì:** protocol từ chối ở validation stage — không thể ship.
 
 #### Option C: Off-chain randomness (Game Server seeded)
 
 | Pros | Cons |
 |---|---|
 | Đơn giản, 1 transaction | Centralised — Game Server có thể cheat |
-| - | Không dùng Sui native randomness — mất điểm kỹ thuật với judges |
+| - | Không dùng native chain randomness — mất điểm kỹ thuật với judges |
 
 **Loại vì:** Undermines "unmanipulable loot" narrative — core selling point của game.
 
 ### Decision
 
-> **Chọn Option A vì:** Là lựa chọn duy nhất thỏa mãn cả Sui protocol constraint lẫn on-chain randomness requirement. Pattern còn mang lại UX benefit: player thấy loot committed trước khi settle — transparent hơn.
+> **Chọn Option A vì:** Là lựa chọn duy nhất thỏa mãn cả protocol constraint lẫn on-chain randomness requirement. Pattern còn mang lại UX benefit: player thấy loot committed trước khi settle — transparent hơn.
 
 ### Consequences
 
 **Tích cực:**
-- Loot unmanipulable (Sui native randomness)
+- Loot unmanipulable (native chain randomness)
 - Settlement atomic (1 PTB với 4 ops)
 - Pitch narrative: "commit bằng native randomness → settle atomic" — technically impressive
 
@@ -163,10 +167,10 @@ Architecture v1.0 spec "1 PTB = full session": generate loot + battle resolve + 
 
 **CRITICAL Implementation Note:**
 `generate_loot` PHẢI là `entry fun` (không phải `public fun`).
-`entry fun` không thể gọi từ PTB — Frontend phải submit Tx1 riêng biệt.
-Sau khi Tx1 confirm → lấy sessionId từ events → build Tx2.
+`entry fun` không thể gọi từ PTB. Trong implementation hiện tại, Tx1 được **Game Server** submit qua endpoint `/api/session/loot` vì `MissionSession` là owned object của server và function này còn yêu cầu `&GameAuthority`.
+Sau khi Tx1 confirm → Frontend gọi `/api/battle` để lấy Tx2 bytes.
 
-**Xem thêm:** BLUEPRINT.md Section 3 (Happy Path data flow), Section 5 (loot.move spec)
+**Xem thêm:** BLUEPRINT.md Section 3 (Happy Path data flow), Section 5 (`mission::generate_loot` spec)
 
 ---
 
@@ -180,12 +184,12 @@ Sau khi Tx1 confirm → lấy sessionId từ events → build Tx2.
 
 ### Context
 
-Tech Spec v1.0 dùng `OneID::UserID` như Move type trong struct definitions và function signatures. Type này không tồn tại trong Sui Move framework — compile error.
+Tech Spec v1.0 dùng `OneID::UserID` như Move type trong struct definitions và function signatures. Type này không tồn tại trong OneChain Move framework — compile error.
 
 **Constraints:**
 - Move contracts cần identifier cho player/owner
 - OneID là SDK/OAuth layer — không phải Move module
-- Move chỉ có primitives + Sui system types
+- Move chỉ có primitives + system types của runtime
 
 ### Options Considered
 
@@ -193,9 +197,9 @@ Tech Spec v1.0 dùng `OneID::UserID` như Move type trong struct definitions và
 
 | Pros | Cons |
 |---|---|
-| Native Sui type — compile và chạy được | OneID ↔ address mapping phải manage off-chain |
+| Native runtime type — compile và chạy được | OneID ↔ address mapping phải manage off-chain |
 | Zero dependency vào OneID module | - |
-| zkLogin naturally produces Sui `address` | - |
+| zk proof login naturally produces on-chain `address` | - |
 
 #### Option B: Tạo `OneID` wrapper module trong Move
 
@@ -203,17 +207,17 @@ Tech Spec v1.0 dùng `OneID::UserID` như Move type trong struct definitions và
 
 ### Decision
 
-> **Chọn Option A vì:** `address` là Sui primitive type. zkLogin tự nhiên produce Sui `address`. Không có lý do kỹ thuật nào để wrap thêm layer on-chain.
+> **Chọn Option A vì:** `address` là primitive type của runtime. zk proof login tự nhiên produce on-chain `address`. Không có lý do kỹ thuật nào để wrap thêm layer on-chain.
 
 ### Consequences
 
 **Tích cực:**
 - Code compile
-- zkLogin integration seamless (zkLogin trả về `address`)
+- Login integration seamless (flow trả về `address`)
 
 **Implementation Notes:**
 - Move code: chỉ dùng `address` cho owner/player fields
-- Off-chain: Game Server lưu mapping `{ google_sub → sui_address }` trong session
+- Off-chain: Game Server lưu mapping `{ google_sub → onchain_address }` trong session
 - Frontend: sau `completeLogin()` → có `address` → dùng cho mọi Move interactions
 
 **Xem thêm:** CONTRACTS.md `Hero.owner`, `MissionSession.player`
@@ -245,7 +249,7 @@ Khi nhiều guild quest chạy đồng thời, cần quyết định ownership m
 |---|---|
 | Zero consensus overhead — sub-second latency | Chỉ Game Server address có thể mutate |
 | Parallel sessions mà không block nhau | Frontend không thể query session trực tiếp (phải qua Game Server) |
-| Consistent với Sui best practices cho session state | - |
+| Consistent với best practices cho session state trên object runtime | - |
 
 #### Option B: Shared object (`transfer::share_object`)
 
@@ -259,7 +263,7 @@ Khi nhiều guild quest chạy đồng thời, cần quyết định ownership m
 
 ### Decision
 
-> **Chọn Option A vì:** Chỉ Game Server cần mutate MissionSession. Owned object = zero consensus = parallel execution. Đây là Sui best practice cho session/game state.
+> **Chọn Option A vì:** Chỉ Game Server cần mutate MissionSession. Owned object = zero consensus = parallel execution. Đây là best practice cho session/game state trên runtime object-centric.
 
 ### Consequences
 
@@ -268,7 +272,7 @@ Khi nhiều guild quest chạy đồng thời, cần quyết định ownership m
 - Unlimited parallel sessions không block nhau
 
 **Trade-offs:**
-- Frontend phải query session status qua Game Server API, không trực tiếp từ RPC — chấp nhận được vì Game Server là orchestrator anyway
+- Frontend không mutate session trực tiếp; mọi session transitions đi qua Game Server API (`/api/session/create`, `/api/session/loot`, `/api/battle`) — chấp nhận được vì Game Server là orchestrator anyway
 
 **Implementation Note:**
 ```
@@ -293,10 +297,10 @@ transfer::share_object(session)
 
 ### Context
 
-Khi player muốn burn/upgrade Hero, phải delete UID. Sui `object::delete()` không tự động xóa Dynamic Object Fields — chúng trở thành orphaned objects: tồn tại mãi mãi trên chain nhưng không có owner, không accessible, không refundable.
+Khi player muốn burn/upgrade Hero, phải delete UID. `object::delete()` không tự động xóa Dynamic Object Fields — chúng trở thành orphaned objects: tồn tại mãi mãi trên chain nhưng không có owner, không accessible, không refundable.
 
 **Constraints:**
-- Sui runtime: `object::delete(uid)` chỉ delete UID, không touch DOF
+- Runtime này: `object::delete(uid)` chỉ delete UID, không touch DOF
 - Equipment là real assets có value — không thể mất vĩnh viễn
 
 ### Options Considered
@@ -347,7 +351,7 @@ object::delete(id);  // Safe — không còn DOF
 **Status:** ✅ ACCEPTED
 **Level:** 🟠 REQUIRED
 **Date:** 2026-03-26
-**Source:** VHEATM Cycle #1, H-06 implication; Blackjack-Sui reference
+**Source:** VHEATM Cycle #1, H-06 implication; object-game reference pattern
 **Tags:** `architecture` `game-server` `ptb`
 
 ### Context
@@ -367,7 +371,7 @@ Architecture v1.0 không định nghĩa entity nào build và submit Tx2 settlem
 |---|---|
 | Trusted builder — Game Server kiểm soát battle logic | Game Server là single point of failure |
 | Frontend chỉ co-sign + submit (không thể tamper args) | Cần maintain server 24/7 (Render/Railway free tier OK cho MVP) |
-| Reference: MystenLabs Blackjack-Sui dùng đúng pattern này | - |
+| Reference pattern từ object-chain game implementations dùng đúng pattern này | - |
 
 #### Option B: Frontend tự build Tx2
 
@@ -380,11 +384,11 @@ Architecture v1.0 không định nghĩa entity nào build và submit Tx2 settlem
 
 #### Option C: Smart contract tự trigger Tx2 (on-chain automation)
 
-**Loại vì:** Sui không có on-chain scheduler (cron). Không khả thi trong MVP timeframe.
+**Loại vì:** runtime không có on-chain scheduler (cron). Không khả thi trong MVP timeframe.
 
 ### Decision
 
-> **Chọn Option A vì:** Là pattern chuẩn cho game có server-side authority. Blackjack-Sui reference implementation dùng đúng pattern này. Buildable ~30 lines trong hackathon timeframe.
+> **Chọn Option A vì:** Là pattern chuẩn cho game có server-side authority trên object-chain. Buildable ~30 lines trong hackathon timeframe.
 
 ### Consequences
 
@@ -394,23 +398,30 @@ Architecture v1.0 không định nghĩa entity nào build và submit Tx2 settlem
 
 **Flow (chi tiết):**
 ```
-Player → Frontend → POST /api/battle { heroId, sessionId }
+Player → Frontend → POST /api/session/create { heroId, missionType }
                           ↓
                      Game Server:
-                     1. Query hero stats + loot từ chain
-                     2. Build Tx2 settlement PTB (3 MoveCall ops)
-                     3. Return { txBytes (base64) }
+                     1. Create MissionSession owned by sponsor/server address
+                     2. POST /api/session/loot { sessionId } → self-submit Tx1
                           ↓
                      Frontend:
-                     4. POST /api/sponsor { txBytes } → sponsorSig
-                     5. User zkSign → executeTransactionBlock([zkSig, sponsorSig])
+                     3. POST /api/battle { sessionId }
+                          ↓
+                     Game Server:
+                     4. Read session.player + session.hero_id từ chain
+                     5. Build Tx2 settlement PTB bằng 1 call `mission::settle_and_distribute`
+                     6. Return { txBytes (base64) }
+                          ↓
+                     Frontend:
+                     7. POST /api/sponsor { txBytes } với bearer auth → sponsorSig
+                     8. User zkSign → executeTransactionBlock([zkSig, sponsorSig])
 ```
 
 **Xem thêm:** BLUEPRINT.md Section 5 (`/api/battle` pseudocode), CONTRACTS.md Section 4 (`POST /api/battle` contract)
 
 ---
 
-## ADR-007 — zkLogin dùng Mysten Hosted Prover — Không self-host Docker
+## ADR-007 — zk Proof Login dùng Hosted Prover — Không self-host Docker
 
 **Status:** ✅ ACCEPTED
 **Level:** 🔴 MANDATORY (MVP only)
@@ -420,20 +431,20 @@ Player → Frontend → POST /api/battle { heroId, sessionId }
 
 ### Context
 
-zkLogin yêu cầu ZK proving service để generate proof từ Google JWT. Có hai options: self-host Docker container hoặc dùng Mysten hosted prover.
+Google + zk proof login yêu cầu ZK proving service để generate proof từ Google JWT. Có hai options: self-host Docker container hoặc dùng hosted prover.
 
 **Constraints:**
 - Hackathon timeline: 4-5 ngày — không có thời gian cho Docker DevOps
-- Mysten hosted prover: free cho devnet/testnet
-- Security trade-off: hosted prover = trust Mysten Labs (acceptable cho hackathon demo)
+- Hosted prover: free cho devnet/testnet
+- Security trade-off: hosted prover = trust provider uptime (acceptable cho hackathon demo)
 
 ### Options Considered
 
-#### Option A: Mysten Hosted Prover (`prover-dev.mystenlabs.com`) ← **CHOSEN**
+#### Option A: Hosted Prover (`prover-dev.mystenlabs.com`) ← **CHOSEN**
 
 | Pros | Cons |
 |---|---|
-| Free cho devnet/testnet | Phụ thuộc vào Mysten Labs uptime |
+| Free cho devnet/testnet | Phụ thuộc vào prover provider uptime |
 | Zero setup — 1 URL | Salt ở localStorage → security trade-off |
 | 2-5s latency bình thường | Production cần migrate sang OneID production prover |
 
@@ -453,10 +464,10 @@ zkLogin yêu cầu ZK proving service để generate proof từ Google JWT. Có 
 ### Consequences
 
 **Tích cực:**
-- zkLogin hoạt động trong < 1 giờ implement (WOW #1 deliverable)
+- Google + zk proof login hoạt động trong < 1 giờ implement (WOW #1 deliverable)
 
 **Trade-offs:**
-- localStorage salt: nếu user clear localStorage → mất Sui address liên kết với Google account — sẽ revisit Phase 2 với server-side salt
+- localStorage salt: nếu user clear localStorage → mất on-chain address liên kết với Google account — sẽ revisit Phase 2 với server-side salt
 
 **Applies:** MVP only. Target: OneID production auth system.
 
@@ -514,9 +525,14 @@ Gasless transaction (WOW #2) cần sponsored transaction relayer. Cần minimal 
 - WOW #2 achievable trong ngày 2
 
 **Rủi ro:**
-- Sponsor wallet hết SUI → mitigate bằng: check balance trước demo, có `sui client faucet` sẵn sàng
+- Sponsor wallet hết native gas token → mitigate bằng: check balance trước demo, có faucet hoặc funded backup sẵn sàng
 
 **Applies:** MVP only. Target: Shinami Gas Station production SLA.
+
+**Security hardening đã áp dụng trong implementation hiện tại:**
+- `/api/sponsor`, `/api/session/*`, `/api/battle` đều yêu cầu bearer auth phát từ `/api/auth/complete`
+- Sponsor endpoint verify lại `sender` từ transaction bytes, bắt buộc `gasOwner == SPONSOR_ADDRESS`, và chỉ allowlist một tập MoveCall nhỏ
+- CORS không còn mở toàn phần; dùng allowlist origin qua env `ALLOWED_ORIGINS`
 
 **Xem thêm:** BLUEPRINT.md Section 5 (`/api/sponsor` pseudocode), CONTRACTS.md `SPONSOR_RATE_LIMIT_PER_DAY`
 
@@ -578,7 +594,7 @@ MVP scope v1.0 gồm 7+ Move modules, OneDEX integration, OneRWA tokenization, O
 
 ---
 
-## ADR-010 — Deterministic Battle Resolution — Không dùng `sui::random` trong Tx2
+## ADR-010 — Deterministic Battle Resolution — Không dùng `Random` trong Tx2
 
 **Status:** ✅ ACCEPTED
 **Level:** 🟠 REQUIRED
@@ -591,7 +607,7 @@ MVP scope v1.0 gồm 7+ Move modules, OneDEX integration, OneRWA tokenization, O
 Tx2 settlement PTB không thể dùng `Random` input (ADR-002). Battle resolution cần algorithm đủ thú vị (không predictable) nhưng pure deterministic để có thể là `public fun` và chạy trong PTB.
 
 **Constraints:**
-- Không dùng `sui::random` trong Tx2 (ADR-002 prohibits)
+- Không dùng `Random` trong Tx2 (ADR-002 prohibits)
 - Không dùng off-chain data từ Game Server (trust assumption)
 - Variance phải không predictable từ user, không manipulable
 
@@ -614,9 +630,9 @@ Tx2 settlement PTB không thể dùng `Random` input (ADR-002). Battle resolutio
 
 **Loại vì:** Trust assumption không acceptable cho on-chain game.
 
-#### Option C: `sui::random` trong Tx2
+#### Option C: `Random` trong Tx2
 
-**Loại vì:** ADR-002 — Sui protocol từ chối.
+**Loại vì:** ADR-002 — protocol từ chối.
 
 ### Decision
 
@@ -624,8 +640,9 @@ Tx2 settlement PTB không thể dùng `Random` input (ADR-002). Battle resolutio
 
 ### Battle formula:
 ```
-seed = clock::timestamp_ms(clock) % BATTLE_SEED_MOD  // 0-19
-win  = (hero_power + seed) > boss_power
+boss_power   = get_boss_power(mission_type, contract_type)
+stance_bonus = get_stance_bonus(mission_type, stance)
+win = (hero_power + stance_bonus) > boss_power
 ```
 
 ### Consequences
@@ -635,9 +652,9 @@ win  = (hero_power + seed) > boss_power
 - No oracle dependency
 
 **Trade-offs:**
-- Deterministic nếu timestamp biết trước: chấp nhận cho MVP. Target upgrade: VRF oracle.
+- Depth combat hiện phụ thuộc nhiều vào build + stance + contract selection hơn là reactive choices giữa trận.
 
-**Xem thêm:** BLUEPRINT.md Section 5 (`mission::settle` pseudocode), CONTRACTS.md `BATTLE_SEED_MOD`
+**Xem thêm:** BLUEPRINT.md current snapshot, CONTRACTS.md current snapshot
 
 ---
 
@@ -685,8 +702,9 @@ OnePredict AI API không available cho hackathon testing. Real LLM call = latenc
 ### Hint logic:
 ```
 readiness = min(100, round((heroPower / 50) * 100))
-nếu readiness >= 70 → "ready for Forest Quest"
-nếu readiness < 70  → suggest equip missing slots
+nếu readiness >= 70 → recommend Raid
+nếu readiness >= 40 → recommend Harvest
+nếu readiness < 40  → recommend Training hoặc equip trước
 ```
 
 ### Consequences
@@ -696,6 +714,64 @@ nếu readiness < 70  → suggest equip missing slots
 - Pitch narrative "OnePredict integration — Phase 2" credible
 
 **Applies:** MVP only. Target: OnePredict API với real AI analysis.
+
+---
+
+## ADR-012 — Reward Model Shift sang Materials + Crafting
+
+**Status:** ✅ ACCEPTED
+**Level:** 🟠 REQUIRED
+**Date:** 2026-03-26
+
+Quest thắng không còn mặc định mint gear trực tiếp. Loop hiện tại ưu tiên `materials -> salvage -> craft`, chỉ giữ direct gear ở một phần reward table để bảo toàn cảm giác high-roll.
+
+**Decision:** economy của OneRealm phải có sinks và player decisions, không chỉ inflation của equipment rác.
+
+---
+
+## ADR-013 — Mission Families + Contract Types
+
+**Status:** ✅ ACCEPTED
+**Level:** 🟠 REQUIRED
+**Date:** 2026-03-26
+
+`MissionType` hiện là `Raid / Harvest / Training`, và `ContractType` hiện là `Standard / Bounty / Expedition`.
+
+**Decision:**
+- Mission family quyết định reward mix và build affinity.
+- Contract type quyết định difficulty, payout curve, và với `Expedition` còn quyết định delayed resolution qua `Clock`.
+
+---
+
+## ADR-014 — Hero Archetype + Profession Progression
+
+**Status:** ✅ ACCEPTED
+**Level:** 🟠 REQUIRED
+**Date:** 2026-03-26
+
+Hero cần có identity nhiều trục:
+- `archetype` cho combat affinity
+- `profession` cho economy specialization
+- `profession_xp` cho long-term progression
+
+**Decision:** progression dài hạn sẽ bám vào profession rank trước, không bám vào token hay DeFi layer.
+
+---
+
+## ADR-015 — Blacksmith Tech Tree theo Profession Rank
+
+**Status:** ✅ ACCEPTED
+**Level:** 🟠 REQUIRED
+**Date:** 2026-03-26
+
+Blacksmith recipes không còn là flat list.
+
+**Decision:**
+- base recipes: ai cũng craft được
+- profession recipes: cần đúng nghề + rank `Adept`
+- master recipes: cần đúng nghề + rank `Master`
+
+Điều này tạo ra `why keep playing` rõ ràng cho profession loop: thắng quest để lên rank, rồi unlock craft tier mới.
 
 ---
 
@@ -716,6 +792,10 @@ nếu readiness < 70  → suggest equip missing slots
 | ADR-009 | 🔴 | 1.00 | 0.25 | → 0.75 | MVP only |
 | ADR-010 | 🟠 | 1.00 | 0.20 | → 0.80 | MVP + Target |
 | ADR-011 | 🟡 | 1.00 | 0.25 | → 0.75 | MVP only |
+| ADR-012 | 🟠 | 1.00 | 0.20 | → 0.80 | MVP + Target |
+| ADR-013 | 🟠 | 1.00 | 0.20 | → 0.80 | MVP + Target |
+| ADR-014 | 🟠 | 1.00 | 0.20 | → 0.80 | MVP + Target |
+| ADR-015 | 🟠 | 1.00 | 0.20 | → 0.80 | MVP + Target |
 
 ---
 
@@ -723,9 +803,9 @@ nếu readiness < 70  → suggest equip missing slots
 
 | Quyết định cũ (v1.0) | Superseded by | Lý do |
 |---|---|---|
-| "1 PTB = full session" | ADR-002 | Sui protocol reject PTB với Random + chain |
-| `object::DynamicFields<T>` như struct field | ADR-001 | Không tồn tại trong Sui Move |
-| `signer` parameter trong Move functions | ADR-001 | Aptos pattern — Sui dùng `TxContext` |
+| "1 PTB = full session" | ADR-002 | protocol reject PTB với Random + chain |
+| `object::DynamicFields<T>` như struct field | ADR-001 | Không tồn tại trong OneChain Move |
+| `signer` parameter trong Move functions | ADR-001 | Aptos pattern — runtime này dùng `TxContext` |
 | `OneID::UserID` type trong Move | ADR-003 | Không compile — dùng `address` |
 | `transfer::share_object(session)` | ADR-004 | Consensus bottleneck |
 | Build OneDEX + OneRWA + OnePredict trong MVP | ADR-009 | ROI quá thấp cho 4-5 ngày |
@@ -736,14 +816,18 @@ nếu readiness < 70  → suggest equip missing slots
 
 | ADR | Title | Level | Status | Tags |
 |---|---|---|---|---|
-| ADR-001 | Sui Move Syntax | 🔴 | ✅ | `move` `syntax` |
+| ADR-001 | OneChain Move Syntax | 🔴 | ✅ | `move` `syntax` |
 | ADR-002 | 2-Transaction Session Pattern | 🔴 | ✅ | `randomness` `PTB` |
 | ADR-003 | `address` on-chain | 🔴 | ✅ | `identity` `oneid` |
 | ADR-004 | MissionSession Owned Object | 🟠 | ✅ | `object-model` `performance` |
 | ADR-005 | Unequip-All Guard | 🟠 | ✅ | `lifecycle` `DOF` |
 | ADR-006 | Game Server = Coordinator + Tx2 Builder | 🟠 | ✅ | `architecture` `PTB` |
-| ADR-007 | zkLogin Hosted Prover | 🔴 | ✅ | `auth` `MVP` |
+| ADR-007 | Hosted Prover for zk Proof Login | 🔴 | ✅ | `auth` `MVP` |
 | ADR-008 | Self-managed Sponsor Wallet | 🔴 | ✅ | `gasless` `MVP` |
 | ADR-009 | Feature Budget 4+4+3 | 🔴 | ✅ | `scope` `MVP` |
 | ADR-010 | Deterministic Battle | 🟠 | ✅ | `battle` `randomness` |
 | ADR-011 | Mock AI Mentor | 🟡 | ✅ | `ai` `MVP` |
+| ADR-012 | Materials + Crafting Reward Model | 🟠 | ✅ | `economy` `crafting` |
+| ADR-013 | Mission Families + Contract Types | 🟠 | ✅ | `gameplay` `contracts` |
+| ADR-014 | Archetype + Profession Progression | 🟠 | ✅ | `identity` `progression` |
+| ADR-015 | Blacksmith Tech Tree | 🟠 | ✅ | `crafting` `unlock` |

@@ -6,13 +6,15 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
+    "test": "npm run build && node --test dist/*.test.js",
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@mysten/sui": "^1.0.0",
+    "@onelabs/sui": "^1.26.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "google-auth-library": "^10.6.2"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

@@ -5,7 +5,7 @@
 export interface AiHintResult {
   hint:               string;
   readiness:          number;  // 0-100
-  recommended_quest:  string;  // "forest" | "training"
+  recommended_quest:  string;  // "raid" | "harvest" | "training"
 }
 
 /**
@@ -19,9 +19,17 @@ export function getAiHint(heroPower: number, equippedSlots: number): AiHintResul
 
   if (readiness >= 70) {
     return {
-      hint: `Hero ready (${readiness}%). Recommend Forest Quest for rare loot drop.`,
+      hint: `Hero ready (${readiness}%). Recommend Raid missions for higher gear odds.`,
       readiness,
-      recommended_quest: 'forest',
+      recommended_quest: 'raid',
+    };
+  }
+
+  if (readiness >= 40) {
+    return {
+      hint: `Hero stable (${readiness}%). Harvest runs are ideal for stocking materials without overcommitting.`,
+      readiness,
+      recommended_quest: 'harvest',
     };
   }
 

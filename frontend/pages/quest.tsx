@@ -1,31 +1,38 @@
-'use client';
 // pages/quest.tsx — Quest Screen [2.3] — Core gameplay loop
 // BLUEPRINT.md Section 3: Happy Path data flow (Tx1 loot commit → Tx2 settlement)
-// ADR-002: 2-Transaction pattern (Tx1 = entry loot::generate_loot, Tx2 = PTB settlement)
+// ADR-002: 2-Transaction pattern (Tx1 = server-submitted mission::generate_loot, Tx2 = PTB settlement)
 // ADR-006: Game Server builds Tx2, Frontend co-signs and submits
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
-import { SuiClient } from '@mysten/sui/client';
-import { Transaction } from '@mysten/sui/transactions';
-import { getStoredSession } from '../auth/zklogin';
+import { getAuthHeaders, getStoredSession } from '../auth/zklogin';
 import { executeGasless, buildBattleTxAndExecute, GaslessError } from '../transactions/gasless';
+import { e2eFetch } from '../lib/e2e';
+import { buildExplorerTxUrl, CHAIN_LABEL } from '../lib/chain';
 
-const SUI_NETWORK = process.env.NEXT_PUBLIC_SUI_NETWORK ?? 'devnet';
-const PACKAGE_ID  = process.env.NEXT_PUBLIC_ONEREALM_PACKAGE_ID!;
 const SERVER_URL  = process.env.NEXT_PUBLIC_GAME_SERVER_URL ?? 'http://localhost:3001';
+const JUDGE_MODE = process.env.NEXT_PUBLIC_JUDGE_MODE === 'true';
 
-// Clock object on Sui: always "0x6"  (CONTRACTS.md: CLOCK_OBJECT_ID)
-const CLOCK_OBJECT_ID = '0x6';
-// Random object on Sui: always "0x8"
-const RANDOM_OBJECT_ID = '0x8';
+interface StoredExpeditionState {
+  address: string;
+  heroId: string;
+  missionType: 0 | 1 | 2;
+  contractType: 0 | 1 | 2;
+  stance: 0 | 1 | 2;
+  sessionId: string;
+  readyAtMs: number;
+  tx1Digest: string;
+}
 
-const suiClient = new SuiClient({ url: `https://fullnode.${SUI_NETWORK}.sui.io` });
+function getExpeditionStorageKey(heroId: string): string {
+  return `onerealm:expedition:${heroId}`;
+}
 
 type QuestStep =
   | 'select'        // [step 1] Choose mission type
   | 'tx1-pending'   // [step 2] Submitting Tx1 (loot commit)
   | 'tx1-done'      // [step 3] Tx1 confirmed — loot discovered!
+  | 'expedition-wait'
   | 'tx2-pending'   // [step 4] Submitting Tx2 (battle + settle)
   | 'win'           // [step 5a] Battle won!
   | 'fail'          // [step 5b] Battle lost
@@ -33,7 +40,8 @@ type QuestStep =
 
 interface QuestResult {
   txDigest: string;
-  itemCount: number;
+  equipmentCount: number;
+  materialCount: number;
 }
 
 export default function QuestPage() {
@@ -41,20 +49,50 @@ export default function QuestPage() {
   const heroId       = (router.query.heroId as string) || '';
 
   const [address, setAddress]       = useState<string | null>(null);
-  const [missionType, setMissionType] = useState<0 | 1>(0); // 0=FOREST, 1=DUNGEON
+  const [missionType, setMissionType] = useState<0 | 1 | 2>(2); // 0=RAID, 1=HARVEST, 2=TRAINING
+  const [contractType, setContractType] = useState<0 | 1 | 2>(0); // 0=STANDARD, 1=BOUNTY, 2=EXPEDITION
+  const [stance, setStance]         = useState<0 | 1 | 2>(0); // 0=BALANCED, 1=AGGRESSIVE, 2=GUARDED
   const [step, setStep]             = useState<QuestStep>('select');
   const [sessionId, setSessionId]   = useState('');
   const [error, setError]           = useState('');
   const [result, setResult]         = useState<QuestResult | null>(null);
   const [tx1Digest, setTx1Digest]   = useState('');
+  const [readyAtMs, setReadyAtMs]   = useState(0);
+  const [nowMs, setNowMs]           = useState(0);
 
   useEffect(() => {
     if (!router.isReady) return;
     const session = getStoredSession();
-    if (!session.address) { router.push('/'); return; }
+    if (!session.address || !session.hasApiSession) { router.push('/'); return; }
     setAddress(session.address);
     if (!heroId) { router.push('/hero'); }
+    if (heroId) {
+      const stored = localStorage.getItem(getExpeditionStorageKey(heroId));
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored) as StoredExpeditionState;
+          if (parsed.address === session.address && parsed.readyAtMs > Date.now()) {
+            setMissionType(parsed.missionType);
+            setContractType(parsed.contractType);
+            setStance(parsed.stance);
+            setSessionId(parsed.sessionId);
+            setReadyAtMs(parsed.readyAtMs);
+            setTx1Digest(parsed.tx1Digest);
+            setStep('expedition-wait');
+          }
+        } catch {
+          localStorage.removeItem(getExpeditionStorageKey(heroId));
+        }
+      }
+    }
   }, [router.isReady, heroId]);
+
+  useEffect(() => {
+    if (step !== 'expedition-wait' || !readyAtMs) return;
+    setNowMs(Date.now());
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [step, readyAtMs]);
 
   // ============================================================
   // Tx1: Create MissionSession + generate_loot (entry fun — ADR-002)
@@ -67,30 +105,44 @@ export default function QuestPage() {
     try {
       // Step 1: Create MissionSession via Game Server
       // (Game Server calls mission::create_session and transfer to itself — ADR-004)
-      const createRes = await fetch(`${SERVER_URL}/api/session/create`, {
+      const createRes = await e2eFetch(`${SERVER_URL}/api/session/create`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ heroId, playerAddress: address, missionType }),
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ heroId, missionType, contractType, stance }),
       });
 
       if (!createRes.ok) throw new Error('Failed to create session');
-      const { sessionId: newSessionId, createTxDigest } = await createRes.json();
+      const { sessionId: newSessionId, readyAtMs: nextReadyAtMs } = await createRes.json();
       setSessionId(newSessionId);
+      setReadyAtMs(nextReadyAtMs ?? 0);
 
       // E-01 FIX: Game Server submits Tx1 instead of Player (owned object limits)
-      const lootRes = await fetch(`${SERVER_URL}/api/session/loot`, {
+      const lootRes = await e2eFetch(`${SERVER_URL}/api/session/loot`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: newSessionId, playerAddress: address }),
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ sessionId: newSessionId }),
       });
       if (!lootRes.ok) throw new Error('Failed to generate loot via server');
       const { tx1Digest } = await lootRes.json();
       
       setTx1Digest(tx1Digest);
-      setStep('tx1-done');
-
-      // Step 4: Auto-proceed to Tx2 after short reveal delay
-      setTimeout(() => handleSettleBattle(newSessionId), 2000);
+      if (contractType === 2) {
+        const storedExpedition: StoredExpeditionState = {
+          address,
+          heroId,
+          missionType,
+          contractType,
+          stance,
+          sessionId: newSessionId,
+          readyAtMs: nextReadyAtMs ?? 0,
+          tx1Digest,
+        };
+        localStorage.setItem(getExpeditionStorageKey(heroId), JSON.stringify(storedExpedition));
+        setStep('expedition-wait');
+      } else {
+        setStep('tx1-done');
+        setTimeout(() => handleSettleBattle(newSessionId), 2000);
+      }
 
     } catch (e: any) {
       setError(handleQuestError(e));
@@ -104,22 +156,29 @@ export default function QuestPage() {
   async function handleSettleBattle(sid: string) {
     setStep('tx2-pending');
     try {
-      // Game Server builds Tx2 PTB: total_power → settle → distribute (ADR-006)
-      const tx2Result = await buildBattleTxAndExecute(sid, heroId, address!);
+      // Game Server builds Tx2 PTB: settle_and_distribute(auth, session, hero)
+      const tx2Result = await buildBattleTxAndExecute(sid, address!);
 
-      // Detect win/lose from effects: check if new Equipment objects appeared
-      const created = tx2Result.effects?.created ?? [];
-      const equipmentCreated = created.filter((obj: any) =>
-        obj.owner?.AddressOwner === address
+      const ownedObjectChanges = (tx2Result.objectChanges ?? []).filter((change: any) =>
+        change.type === 'created' && change.owner?.AddressOwner === address
       );
+      const equipmentCount = ownedObjectChanges.filter((change: any) =>
+        change.objectType?.includes('::equipment::Equipment')
+      ).length;
+      const materialCount = ownedObjectChanges.filter((change: any) =>
+        change.objectType?.includes('::material::Material')
+      ).length;
 
-      if (equipmentCreated.length > 0) {
-        setResult({ txDigest: tx2Result.digest, itemCount: equipmentCreated.length });
+      if (equipmentCount > 0 || materialCount > 0) {
+        setResult({ txDigest: tx2Result.digest, equipmentCount, materialCount });
         setStep('win');
       } else {
         // BLUEPRINT.md: tx doesn't fail on battle-lose — session.status = FAILED, rewards = []
-        setResult({ txDigest: tx2Result.digest, itemCount: 0 });
+        setResult({ txDigest: tx2Result.digest, equipmentCount: 0, materialCount: 0 });
         setStep('fail');
+      }
+      if (heroId) {
+        localStorage.removeItem(getExpeditionStorageKey(heroId));
       }
     } catch (e: any) {
       setError(handleQuestError(e));
@@ -141,10 +200,14 @@ export default function QuestPage() {
     setResult(null);
     setError('');
     setTx1Digest('');
+    setReadyAtMs(0);
+    setNowMs(0);
+    if (heroId) {
+      localStorage.removeItem(getExpeditionStorageKey(heroId));
+    }
   }
-
-  const explorerUrl = (digest: string) =>
-    `https://suiexplorer.com/txblock/${digest}?network=${SUI_NETWORK}`;
+  const expeditionReady = readyAtMs > 0 && nowMs >= readyAtMs;
+  const expeditionCountdown = readyAtMs > nowMs ? formatCountdown(readyAtMs - nowMs) : 'Ready now';
 
   return (
     <main style={styles.container}>
@@ -153,32 +216,81 @@ export default function QuestPage() {
         <h1 style={styles.title}>⚔️ Quest</h1>
         <div />
       </header>
+      <div style={styles.runtimeBadge}>Live on {CHAIN_LABEL} • Expedition progress survives refresh</div>
+      {JUDGE_MODE && (
+        <div style={styles.judgeBanner}>Judge Mode: expeditions resolve in about 30 seconds for demo flow.</div>
+      )}
 
       {/* ── STEP: SELECT MISSION ── */}
       {step === 'select' && (
         <div style={styles.card}>
           <h2 style={styles.sectionTitle}>Choose Mission</h2>
           <div style={styles.missionGrid}>
-            {/* Forest Quest */}
             <div
               style={{ ...styles.missionCard, ...(missionType === 0 ? styles.missionSelected : {}) }}
               onClick={() => setMissionType(0)}
             >
-              <div style={styles.missionEmoji}>🌲</div>
-              <h3 style={styles.missionName}>Forest Quest</h3>
-              <p style={styles.missionDesc}>Boss Power: 20</p>
-              <p style={styles.missionTip}>Beginner level — ~50% win with base hero</p>
+              <div style={styles.missionEmoji}>⚔️</div>
+              <h3 style={styles.missionName}>Raid</h3>
+              <p style={styles.missionDesc}>Boss Power: 35</p>
+              <p style={styles.missionTip}>Hard combat, best odds for rare gear</p>
             </div>
-            {/* Dungeon Quest */}
             <div
               style={{ ...styles.missionCard, ...(missionType === 1 ? styles.missionSelected : {}) }}
               onClick={() => setMissionType(1)}
             >
-              <div style={styles.missionEmoji}>🏚️</div>
-              <h3 style={styles.missionName}>Dungeon Quest</h3>
-              <p style={styles.missionDesc}>Boss Power: 35</p>
-              <p style={styles.missionTip}>Expert level — requires full gear</p>
+              <div style={styles.missionEmoji}>⛏️</div>
+              <h3 style={styles.missionName}>Harvest</h3>
+              <p style={styles.missionDesc}>Boss Power: 18</p>
+              <p style={styles.missionTip}>Material-heavy farming with lighter risk</p>
             </div>
+            <div
+              style={{ ...styles.missionCard, ...(missionType === 2 ? styles.missionSelected : {}) }}
+              onClick={() => setMissionType(2)}
+            >
+              <div style={styles.missionEmoji}>📘</div>
+              <h3 style={styles.missionName}>Training</h3>
+              <p style={styles.missionDesc}>Boss Power: 8</p>
+              <p style={styles.missionTip}>Low-risk runs for battle notes and warmup</p>
+            </div>
+          </div>
+          <div style={styles.contractPanel}>
+            <div style={styles.stanceTitle}>Choose Contract</div>
+            <div style={styles.contractGrid}>
+              <button style={{ ...styles.contractBtn, ...(contractType === 0 ? styles.contractSelected : {}) }} onClick={() => setContractType(0)}>
+                📜 Standard
+              </button>
+              <button style={{ ...styles.contractBtn, ...(contractType === 1 ? styles.contractSelected : {}) }} onClick={() => setContractType(1)}>
+                🏹 Bounty
+              </button>
+              <button style={{ ...styles.contractBtn, ...(contractType === 2 ? styles.contractSelected : {}) }} onClick={() => setContractType(2)}>
+                🧭 Expedition
+              </button>
+            </div>
+            <p style={styles.stanceHint}>
+              {contractType === 0 && 'Standard: lower boss pressure, reliable loop for progression.'}
+              {contractType === 1 && 'Bounty: tougher contract, richer drops and better material payout.'}
+              {contractType === 2 && 'Expedition: delayed resolution, strongest payout curve, hero returns later.'}
+            </p>
+          </div>
+          <div style={styles.stancePanel}>
+            <div style={styles.stanceTitle}>Choose Stance</div>
+            <div style={styles.stanceGrid}>
+              <button style={{ ...styles.stanceBtn, ...(stance === 0 ? styles.stanceSelected : {}) }} onClick={() => setStance(0)}>
+                ⚖️ Balanced
+              </button>
+              <button style={{ ...styles.stanceBtn, ...(stance === 1 ? styles.stanceSelected : {}) }} onClick={() => setStance(1)}>
+                🔥 Aggressive
+              </button>
+              <button style={{ ...styles.stanceBtn, ...(stance === 2 ? styles.stanceSelected : {}) }} onClick={() => setStance(2)}>
+                🛡 Guarded
+              </button>
+            </div>
+            <p style={styles.stanceHint}>
+              {stance === 0 && 'Balanced: stable choice, best all-round stance.'}
+              {stance === 1 && 'Aggressive: strongest for Raid pushes and fast clears.'}
+              {stance === 2 && 'Guarded: safer posture, strongest for Harvest stability.'}
+            </p>
           </div>
           <button style={styles.primaryBtn} onClick={handleStartQuest}>
             🗡 Start Quest (Gasless)
@@ -191,9 +303,9 @@ export default function QuestPage() {
         <div style={styles.card}>
           <div style={styles.stepIndicator}>Step 1/2 — Committing Loot</div>
           <div style={styles.progressAnim}>🎲</div>
-          <p style={styles.stepDesc}>Committing loot on-chain using Sui native randomness...</p>
+          <p style={styles.stepDesc}>Committing loot on-chain using native Move randomness...</p>
           <div style={styles.techNote}>
-            Using <code>sui::random::Random</code> — unmanipulable by anyone
+            Using native on-chain randomness — unmanipulable by anyone
           </div>
         </div>
       )}
@@ -205,11 +317,34 @@ export default function QuestPage() {
           <div style={styles.progressAnim}>📦</div>
           <p style={styles.stepDesc}>Loot discovered and committed on-chain!</p>
           <p style={styles.subtext}>Initiating battle resolution...</p>
-          {tx1Digest && (
-            <a href={explorerUrl(tx1Digest)} target="_blank" rel="noreferrer" style={styles.explorerLink}>
+          {tx1Digest && buildExplorerTxUrl(tx1Digest) && (
+            <a href={buildExplorerTxUrl(tx1Digest)!} target="_blank" rel="noreferrer" style={styles.explorerLink}>
               View Tx1 on Explorer →
             </a>
           )}
+        </div>
+      )}
+
+      {step === 'expedition-wait' && (
+        <div style={styles.card}>
+          <div style={styles.stepIndicator}>Expedition Underway</div>
+          <div style={styles.progressAnim}>🧭</div>
+          <p style={styles.stepDesc}>Your hero is out on an asynchronous expedition.</p>
+          <div style={styles.techNote}>
+            Expedition unlocks in <code>{expeditionCountdown}</code>
+          </div>
+          {tx1Digest && buildExplorerTxUrl(tx1Digest) && (
+            <a href={buildExplorerTxUrl(tx1Digest)!} target="_blank" rel="noreferrer" style={styles.explorerLink}>
+              View departure on Explorer →
+            </a>
+          )}
+          <button
+            style={{ ...styles.primaryBtn, opacity: expeditionReady ? 1 : 0.5 }}
+            onClick={() => handleSettleBattle(sessionId)}
+            disabled={!expeditionReady}
+          >
+            {expeditionReady ? 'Resolve Expedition' : 'Waiting for Return'}
+          </button>
         </div>
       )}
 
@@ -220,7 +355,7 @@ export default function QuestPage() {
           <div style={styles.progressAnim}>⚡</div>
           <p style={styles.stepDesc}>Battle resolving atomically on-chain...</p>
           <div style={styles.techNote}>
-            PTB: <code>total_power → settle → distribute</code>
+            PTB: <code>contract + stance + affix + build resolve the encounter deterministically</code>
           </div>
         </div>
       )}
@@ -230,20 +365,23 @@ export default function QuestPage() {
         <div style={styles.card}>
           <div style={styles.winBanner}>🏆 Quest Complete!</div>
           <p style={styles.winDesc}>
-            You received <strong>{result.itemCount}</strong> equipment item
-            {result.itemCount !== 1 ? 's' : ''}!
+            You received <strong>{result.materialCount}</strong> material
+            {result.materialCount !== 1 ? 's' : ''} and <strong>{result.equipmentCount}</strong> equipment item
+            {result.equipmentCount !== 1 ? 's' : ''}!
           </p>
-          <p style={styles.subtext}>Items are now in your wallet on-chain. (WOW #3)</p>
+          <p style={styles.subtext}>Rewards are now in your wallet on-chain. Materials fuel the upcoming crafting loop.</p>
 
           {/* WOW #3 — View on-chain */}
-          <a
-            href={explorerUrl(result.txDigest)}
-            target="_blank"
-            rel="noreferrer"
-            style={styles.explorerBtnWin}
-          >
-            🔍 View on Sui Explorer
-          </a>
+          {buildExplorerTxUrl(result.txDigest) && (
+            <a
+              href={buildExplorerTxUrl(result.txDigest)!}
+              target="_blank"
+              rel="noreferrer"
+              style={styles.explorerBtnWin}
+            >
+              🔍 View transaction on explorer
+            </a>
+          )}
 
           <div style={styles.actionRow}>
             <button style={styles.primaryBtn} onClick={resetQuest}>
@@ -262,7 +400,7 @@ export default function QuestPage() {
           <div style={styles.failBanner}>💀 Quest Failed</div>
           <p style={styles.stepDesc}>Hero power insufficient to defeat the boss.</p>
           <div style={styles.aiPanel}>
-            🤖 Tip: Equip weapon + armor to boost your power before attempting again.
+            🤖 Tip: swap to Training or Harvest first, then come back for Raid when your build is ready.
           </div>
           <div style={styles.actionRow}>
             <button style={styles.primaryBtn} onClick={resetQuest}>
@@ -300,19 +438,53 @@ const styles: Record<string, React.CSSProperties> = {
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
   backBtn: { background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', padding: '8px 16px', borderRadius: 8, cursor: 'pointer' },
   title: { fontSize: 22, fontWeight: 800, margin: 0 },
+  runtimeBadge: {
+    alignSelf: 'center',
+    background: 'rgba(96,165,250,0.14)',
+    border: '1px solid rgba(96,165,250,0.28)',
+    borderRadius: 999,
+    color: '#bfdbfe',
+    fontSize: 12,
+    fontWeight: 700,
+    margin: '0 auto 18px',
+    padding: '8px 14px',
+  },
+  judgeBanner: {
+    alignSelf: 'center',
+    background: 'rgba(245,158,11,0.14)',
+    border: '1px solid rgba(245,158,11,0.35)',
+    borderRadius: 14,
+    color: '#fde68a',
+    fontSize: 13,
+    fontWeight: 700,
+    margin: '0 auto 18px',
+    maxWidth: 520,
+    padding: '10px 14px',
+    textAlign: 'center',
+  },
   card: {
     background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
     borderRadius: 20, padding: '28px 24px', maxWidth: 480, margin: '0 auto', width: '100%',
     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
   },
   sectionTitle: { margin: 0, fontSize: 18, fontWeight: 700 },
-  missionGrid:  { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, width: '100%' },
+  missionGrid:  { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, width: '100%' },
   missionCard: {
     background: 'rgba(255,255,255,0.05)', border: '2px solid rgba(255,255,255,0.1)',
     borderRadius: 14, padding: '16px 12px', cursor: 'pointer', textAlign: 'center',
     transition: 'border-color 0.2s',
   },
   missionSelected: { borderColor: '#667eea', background: 'rgba(102,126,234,0.15)' },
+  stancePanel: { width: '100%', background: 'rgba(255,255,255,0.04)', borderRadius: 14, padding: 14, border: '1px solid rgba(255,255,255,0.08)' },
+  contractPanel: { width: '100%', background: 'rgba(255,255,255,0.04)', borderRadius: 14, padding: 14, border: '1px solid rgba(255,255,255,0.08)' },
+  stanceTitle: { fontSize: 13, fontWeight: 700, marginBottom: 10, color: 'rgba(255,255,255,0.78)' },
+  contractGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 },
+  contractBtn: { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)', color: '#fff', borderRadius: 10, padding: '10px 8px', cursor: 'pointer', fontWeight: 700, fontSize: 12 },
+  contractSelected: { borderColor: '#fcd34d', background: 'rgba(245,158,11,0.16)' },
+  stanceGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 },
+  stanceBtn: { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.12)', color: '#fff', borderRadius: 10, padding: '10px 8px', cursor: 'pointer', fontWeight: 700, fontSize: 12 },
+  stanceSelected: { borderColor: '#93c5fd', background: 'rgba(59,130,246,0.16)' },
+  stanceHint: { margin: '10px 0 0', fontSize: 12, color: 'rgba(255,255,255,0.58)', textAlign: 'center' },
   missionEmoji: { fontSize: 32, marginBottom: 6 },
   missionName:  { margin: '0 0 4px', fontSize: 14, fontWeight: 700 },
   missionDesc:  { margin: '0 0 4px', fontSize: 12, color: '#fbbf24' },
@@ -345,3 +517,11 @@ const styles: Record<string, React.CSSProperties> = {
   aiPanel:     { background: 'rgba(102,126,234,0.1)', borderRadius: 12, padding: '12px 16px', fontSize: 13, color: 'rgba(255,255,255,0.7)', width: '100%' },
   errorText:   { color: '#fca5a5', textAlign: 'center', margin: 0 },
 };
+
+function formatCountdown(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${hours}h ${minutes}m ${seconds}s`;
+}

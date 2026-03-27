@@ -22,6 +22,56 @@
 
 ---
 
+## Current Implementation Snapshot
+
+> Snapshot này mô tả flow đang chạy trong repo. Nếu phần cũ bên dưới còn nhắc enum, combat formula, hay signature cũ thì snapshot này thắng.
+
+### Quest Flow
+
+```text
+1. Frontend POST /api/session/create { heroId, missionType, contractType, stance }
+2. Game Server create MissionSession(authority, player, hero, mission_type, contract_type, clock, stance)
+3. Frontend POST /api/session/loot { sessionId }
+4. Game Server submit Tx1 mission::generate_loot(...)
+5. Nếu contractType != Expedition:
+     Frontend auto POST /api/battle { sessionId }
+     Game Server build Tx2 mission::settle_and_distribute(authority, session, hero, clock)
+6. Nếu contractType == Expedition:
+     Frontend nhận readyAtMs, hiển thị countdown
+     Chỉ khi Date.now() >= readyAtMs mới gọi /api/battle
+7. Tx2 win:
+     - distribute materials/equipment
+     - distribute profession bonus material nếu đúng mission loop
+     - grant profession XP cho Hero
+```
+
+### Gameplay Axes đang có
+
+```text
+Mission family   :: Raid | Harvest | Training
+Contract type    :: Standard | Bounty | Expedition
+Stance           :: Balanced | Aggressive | Guarded
+Archetype        :: Warrior | Ranger | Arcanist
+Profession       :: Mining | Foraging | Smithing | Relic Hunting
+Crafting sinks   :: Salvage + Blacksmith recipes + Profession-gated recipes
+Progression      :: profession_xp -> Novice/Adept/Master -> unlock recipe tree
+```
+
+### Reward / Progression Notes
+
+```text
+Standard  = default loop
+Bounty    = harder combat + richer payout
+Expedition= delayed resolution (2h / 6h / 12h) + strongest payout curve
+
+Quest win grants profession_xp:
+  Standard +1
+  Bounty +2
+  Expedition +3
+```
+
+---
+
 ## 1. SYSTEM OVERVIEW
 
 OneRealm là một *on-chain guild economy runtime* — game infrastructure cho phép plug thêm game modes sau hackathon. Được thiết kế với **2 tracks song song**: Hackathon MVP (4-5 ngày) và Target Architecture (3-6 tháng post-hack).
@@ -39,20 +89,20 @@ OneRealm là một *on-chain guild economy runtime* — game infrastructure cho 
 │  LAYER 1 — GAME LOOP LAYER [MVP: solo / TARGET: co-op guild]    │
 │  Quest Session · Loot (Randomness) · Battle · Reward Distribute  │
 └──────────────────────────────────────────────────────────────────┘
-         ↑ Nền tảng: PTB + Sponsored Tx + Mysticeti + Sui Move
+         ↑ Nền tảng: PTB + Sponsored Tx + fast-finality Move runtime
 ```
 
 **MVP System Context (C4 Level 1):**
 
 ```
-[Player]  ──Google OAuth──►  [Frontend React]  ──zkLogin──►  [Sui Address]
+[Player]  ──Google OAuth──►  [Frontend React]  ──zk proof auth──►  [OneChain Address]
 [Player]  ──Quest action──►  [Frontend React]  ──GaslessData─► [Game Server]
                                                                ──Sponsor sig─►
                                                 [Game Server]  ──Tx1 + Tx2──► [OneChain]
 [Player]  ◄──UI update────   [Frontend React]  ◄──Events────   [OneChain RPC]
 ```
 
-**Luồng chính một câu:** Player đăng nhập bằng Google → chơi quest không cần gas → loot được commit on-chain bằng native randomness → settlement atomic trong 1 PTB → item về ví.
+**Luồng chính một câu:** Player đăng nhập bằng Google → chơi quest không cần gas → loot được commit on-chain bằng native chain randomness → settlement atomic trong 1 PTB → item về ví.
 
 **Những gì hệ thống KHÔNG làm trong MVP:**
 - OneDEX / OneRWA / OnePredict — xem ADR-009
@@ -70,10 +120,9 @@ OneRealm là một *on-chain guild economy runtime* — game infrastructure cho 
 |---|---|---|---|---|---|
 | **hero.move** | `contracts/sources/hero.move` | Quản lý Hero object và Equipment DOF | `Ref<Hero>`, `Ref<Equipment>` | `Ref<Hero>` mutated | CÓ (DOF state) |
 | **equipment.move** | `contracts/sources/equipment.move` | Tạo và manage Equipment objects | params (type, power, rarity) | `Ref<Equipment>` | KHÔNG |
-| **loot.move** | `contracts/sources/loot.move` | Tx1: Generate loot dùng Sui `Random` | `&Random`, `Ref<MissionSession>` | `Ref<MissionSession>` mutated | KHÔNG |
-| **mission.move** | `contracts/sources/mission.move` | Session state machine + Tx2 settlement | `Ref<MissionSession>`, `hero_power`, `&Clock` | `vector<Equipment>` | CÓ (status transitions) |
-| **Game Server** | `game-server/` | Sponsor relayer, Tx2 builder, AI hint mock | HTTP requests | HTTP responses + tx bytes | CÓ (rate limit counter) |
-| **Frontend** | `frontend/` | zkLogin auth, 4 screens, gasless tx wrapper | User interactions | Sui transactions + UI state | CÓ (session storage) |
+| **mission.move** | `contracts/sources/mission.move` | Session state machine, server authority, Tx1 loot commit, Tx2 settlement wrapper | `&GameAuthority`, `Ref<MissionSession>`, `&Hero`, `&Clock` | session mutated + rewards distributed | CÓ (status transitions) |
+| **Game Server** | `game-server/` | Auth session issuer, sponsor relayer, Tx1 submitter, Tx2 builder, AI hint mock | HTTP requests | HTTP responses + tx bytes | CÓ (auth sessions + rate limit counter) |
+| **Frontend** | `frontend/` | Google auth + zk proof login, 4 screens, gasless tx wrapper | User interactions | on-chain transactions + UI state | CÓ (session storage) |
 
 > **"Stateful"** = component giữ state giữa các invocations.
 > Game Server rate limit counter: in-memory `Map<address, count>` cho MVP.
@@ -88,37 +137,39 @@ OneRealm là một *on-chain guild economy runtime* — game infrastructure cho 
 
 ```
 [1] Player click "Start Quest" trên Frontend
-      │ triggers: build Tx1
       ▼
-[2] Game Server: tạo MissionSession
-      │ input:  player address, hero_id, mission_type
-      │ output: Ref<MissionSession> (owned by game_server_address)
+[2] Frontend: POST /api/session/create { heroId, missionType }
+      │ bearer auth bắt buộc
+      ▼
+[3] Game Server: tạo MissionSession
+      │ input:  authenticated player address, hero_id, mission_type
+      │ output: Ref<MissionSession> (owned by sponsor/game_server address)
       │ side effect: MissionSession on-chain với status=PENDING
       ▼
-[3] Frontend: build + submit Tx1 (gasless)
-      │ operation: entry loot::generate_loot(Random, MissionSession)
-      │ → POST /api/sponsor → sponsor signature
-      │ → suiClient.executeTransactionBlock([zkSig, sponsorSig])
+[4] Frontend: POST /api/session/loot { sessionId }
+      │ bearer auth bắt buộc
+      ▼
+[5] Game Server: self-submit Tx1
+      │ operation: entry mission::generate_loot(GameAuthority, Random, MissionSession)
       │ output: txHash_1, loot committed on-chain
       │ TERMINAL — không chain thêm gì
       ▼
-[4] Frontend: hiển thị "Discovering loot..." progress bar
+[6] Frontend: hiển thị "Discovering loot..." progress bar
       │ đợi Tx1 confirmation
       ▼
-[5] Frontend: POST /api/battle { sessionId, heroId, playerAddress }
-      │ Game Server builds Tx2 PTB:
-      │   [5.1] hero::total_power(heroId) → heroPower
-      │   [5.2] mission::settle(sessionId, heroPower, clock="0x6") → rewards
-      │   [5.3] mission::distribute(rewards, playerAddress)
+[7] Frontend: POST /api/battle { sessionId }
+      │ Game Server reads session.player + session.hero_id từ chain
+      │ Game Server builds Tx2:
+      │   mission::settle_and_distribute(authority, session, hero, clock="0x6")
       │ output: base64 txBytes
       ▼
-[6] Frontend: sponsor + execute Tx2 (gasless)
-      │ → POST /api/sponsor { txBytes }
-      │ → suiClient.executeTransactionBlock([zkSig, sponsorSig])
+[8] Frontend: sponsor + execute Tx2 (gasless)
+      │ → POST /api/sponsor { txBytes } + bearer auth
+      │ → chainClient.executeTransactionBlock([zkSig, sponsorSig])
       │ output: txHash_2, Equipment objects về ví player
       ▼
-[7] Frontend: hiển thị Result screen
-      │ Win: equipment preview, "View on Sui Explorer" link (WOW #3)
+[9] Frontend: hiển thị Result screen
+      │ Win: equipment preview, "View on Chain Explorer" link (WOW #3)
       │ Lose: "Hero not strong enough" + hint
       │ → navigate to Inventory screen
 ```
@@ -128,9 +179,9 @@ OneRealm là một *on-chain guild economy runtime* — game infrastructure cho 
 ### Error Path — Tx1 Random Rejection
 
 ```
-[3] Frontend: submit Tx1 với generate_loot
-      │ Nếu loot.move là `public` thay vì `entry`:
-      │   → Sui protocol reject tại validation stage
+[3] Game Server: submit Tx1 với mission::generate_loot
+      │ Nếu function này là `public` thay vì `entry`:
+      │   → protocol reject tại validation stage
       │   → error: "PTBs that have commands after Random MoveCall"
       ▼
 [3a] Frontend: catch tx error
@@ -145,7 +196,7 @@ OneRealm là một *on-chain guild economy runtime* — game infrastructure cho 
 ### Error Path — Battle Fail (hero power insufficient)
 
 ```
-[5.2] mission::settle: hero_power + seed <= boss_power
+[5.2] mission::settle: hero_power + stance_bonus <= boss_power
       │ action: session.status = STATUS_FAILED
       │ return: vector::empty()
       ▼
@@ -180,10 +231,11 @@ OneRealm là một *on-chain guild economy runtime* — game infrastructure cho 
       │ SLOT_ARMOR:  dof::exists_ == false → skip
       │ return: HERO_DEFAULT_BASE_POWER (= 10)
       ▼
-[5.2] mission::settle: 10 + seed(0-19) = 10-29
-      │ FOREST:  boss=20 → win nếu seed >= 10 (~50% chance)
-      │ DUNGEON: boss=35 → luôn thua
-      └─ Expected behavior — AI hint should suggest equip before dungeon
+[5.2] mission::settle: 10 + stance/archetype/affix bonus vẫn rất thấp
+      │ TRAINING: có cửa thắng
+      │ HARVEST: thường cần đúng stance hoặc build tốt hơn
+      │ RAID: gần như luôn thua khi naked hero
+      └─ Expected behavior — AI hint should suggest training / harvest first
 ```
 
 ---
@@ -215,7 +267,7 @@ STATES:
   FAILED     (3) — Tx2 settle: hero power insufficient
 
 TRANSITIONS:
-  PENDING ──[loot::generate_loot]──► LOOT_DONE
+  PENDING ──[mission::generate_loot]──► LOOT_DONE
              guard: session.status == PENDING
              action: push loot_tiers, push loot_types
 
@@ -243,7 +295,7 @@ INVARIANTS:
 ### hero.move
 
 **File:** `contracts/sources/hero.move`
-**Dependencies:** `equipment.move` (borrow power getter), `sui::dynamic_object_field`, `sui::object`, `sui::transfer`, `sui::tx_context`
+**Dependencies:** `equipment.move` (borrow power getter), dynamic object fields, object, transfer, tx context
 **Được gọi bởi:** Game Server (PTB builder), Frontend (entry functions)
 
 #### Hàm: `mint()`
@@ -363,7 +415,7 @@ CRITICAL: Bước 2+3 là BẮT BUỘC trước bước 4 — xem ADR-005
 ### equipment.move
 
 **File:** `contracts/sources/equipment.move`
-**Dependencies:** `sui::object`, `sui::dynamic_object_field` (Target only — cho gem)
+**Dependencies:** object, dynamic object fields (Target only — cho gem)
 **Được gọi bởi:** `mission.move` (trong settle), `hero.move` (borrow power getter)
 
 #### Hàm: `create()`
@@ -399,60 +451,20 @@ name(eq: &Equipment) → vector<u8> { eq.name }
 
 ---
 
-### loot.move
-
-**File:** `contracts/sources/loot.move`
-**Dependencies:** `sui::random`, `mission.move` (add_loot)
-**Được gọi bởi:** Frontend (submit Tx1 trực tiếp — KHÔNG qua PTB)
-
-#### Hàm: `generate_loot()` — ⚠️ entry, Tx1 TERMINAL
-
-```
-SIGNATURE:
-  entry fun generate_loot(
-    r:       &Random,
-    session: &mut MissionSession,
-    ctx:     &mut TxContext
-  )
-
-PSEUDOCODE:
-  1. Khởi tạo random generator:
-       gen = sui::random::new_generator(r, ctx)
-
-  2. Determine loot count (1-3):
-       loot_count = generate_u8_in_range(&mut gen, 1, 3)
-
-  3. For i in 0..loot_count:
-       a. Roll loot tier:
-            roll = generate_u8_in_range(&mut gen, 0, 99)
-            tier = if roll < 60 → 0 (COMMON)
-                   elif roll < 90 → 1 (RARE)
-                   else → 2 (LEGENDARY)
-
-       b. Roll loot type:
-            loot_type = generate_u8_in_range(&mut gen, 0, 1)
-
-       c. Commit:
-            mission::add_loot(session, tier, loot_type)
-
-  // FUNCTION ENDS HERE — KHÔNG THÊM LỆNH NÀO NỮA (ADR-002)
-```
-
-**CRITICAL:** Function này là `entry`, không phải `public`. Caller (Frontend) submit Tx1 riêng biệt. Sau khi confirm Tx1, mới build Tx2.
-
 ---
 
 ### mission.move
 
 **File:** `contracts/sources/mission.move`
-**Dependencies:** `sui::object`, `sui::clock`, `equipment.move`, `sui::transfer`
-**Được gọi bởi:** Game Server (create_session), `loot.move` (add_loot), Game Server PTB builder (settle + distribute)
+**Dependencies:** object, clock, `equipment.move`, transfer
+**Được gọi bởi:** Game Server (create_session, generate_loot, settle_and_distribute)
 
 #### Hàm: `create_session()`
 
 ```
 SIGNATURE:
   create_session(
+    authority:    &GameAuthority,
     player:       address,
     hero_id:      ID,
     mission_type: u8,
@@ -460,7 +472,8 @@ SIGNATURE:
   ) → MissionSession
 
 PSEUDOCODE:
-  1. return MissionSession {
+  1. Validate authority object present
+  2. return MissionSession {
        id:           object::new(ctx),
        player:       player,
        hero_id:      hero_id,
@@ -469,7 +482,7 @@ PSEUDOCODE:
        loot_tiers:   vector::empty(),
        loot_types:   vector::empty(),
      }
-  // Caller (Game Server) gọi transfer::transfer(session, game_server_address)
+  // Caller (Game Server) gọi transfer::transfer(session, sponsor/game_server address)
   // KHÔNG dùng transfer::share_object — xem ADR-004
 ```
 
@@ -487,7 +500,7 @@ SIGNATURE:
 
 PSEUDOCODE:
   1. Validate status:
-       nếu session.status != STATUS_PENDING → abort(EInvalidStatus = 0)
+       nếu session.status không thuộc {PENDING, LOOT_DONE} → abort(EInvalidStatus = 0)
   2. Push loot data:
        vector::push_back(&mut session.loot_tiers, tier)
        vector::push_back(&mut session.loot_types, loot_type)
@@ -497,7 +510,25 @@ PSEUDOCODE:
 
 ---
 
-#### Hàm: `settle()` — gọi từ Tx2 PTB
+#### Hàm: `generate_loot()` — entry, Tx1 TERMINAL
+
+```
+SIGNATURE:
+  entry fun generate_loot(
+    authority: &GameAuthority,
+    r:         &Random,
+    session:   &mut MissionSession,
+    ctx:       &mut TxContext
+  )
+
+PSEUDOCODE:
+  1. Validate session.status == STATUS_PENDING, nếu không → abort(ELootAlreadyDone)
+  2. Khởi tạo random generator
+  3. Roll 1-3 loot entries
+  4. Commit từng entry qua add_loot(session, tier, loot_type)
+```
+
+#### Hàm: `settle()` — package-internal
 
 ```
 SIGNATURE:
@@ -513,9 +544,11 @@ PSEUDOCODE:
        nếu session.status != STATUS_LOOT_DONE → abort(ESettleBeforeLoot = 1)
 
   2. Deterministic battle resolution (ADR-010):
-       boss_power = get_boss_power(session.mission_type)
-       seed = clock::timestamp_ms(clock) % BATTLE_SEED_MOD
-       win = (hero_power + seed) > boss_power
+       boss_power   = get_boss_power(session.mission_type, session.contract_type)
+       stance_bonus = get_stance_bonus(session.mission_type, session.stance)
+       nếu session.contract_type == CONTRACT_EXPEDITION:
+         assert clock::timestamp_ms(clock) >= session.ready_at_ms
+       win = (hero_power + stance_bonus) > boss_power
 
   3. Nếu !win:
        session.status = STATUS_FAILED
@@ -535,9 +568,9 @@ PSEUDOCODE:
   5. session.status = STATUS_COMPLETE
   6. return rewards
 
-Helper — get_boss_power(mission_type):
-  MISSION_FOREST  → BOSS_FOREST_POWER (20)
-  MISSION_DUNGEON → BOSS_DUNGEON_POWER (35)
+Helper — get_boss_power(mission_type, contract_type):
+  RAID / HARVEST / TRAINING có base khác nhau
+  BOUNTY và EXPEDITION tăng boss_power so với STANDARD
 
 Helper — get_power_for_tier(tier):
   0 → LOOT_POWER_COMMON    (10)
@@ -555,7 +588,7 @@ Helper — get_name_for_type(loot_type, tier):
 
 ---
 
-#### Hàm: `distribute()` — gọi từ Tx2 PTB
+#### Hàm: `distribute()` — package-internal
 
 ```
 SIGNATURE:
@@ -575,30 +608,87 @@ PSEUDOCODE:
 
 ---
 
+#### Hàm: `settle_and_distribute()` — public settlement wrapper
+
+```
+SIGNATURE:
+  settle_and_distribute(
+    authority: &GameAuthority,
+    session:   &mut MissionSession,
+    hero:      &Hero,
+    clock:     &Clock,
+    ctx:       &mut TxContext
+  )
+
+PSEUDOCODE:
+  1. sender = tx_context::sender(ctx)
+  2. assert sender == session.player
+  3. assert object::id(hero) == session.hero_id
+  4. hero_power = hero::total_power(hero)
+  5. rewards = settle(session, hero_power, clock, ctx)
+  6. distribute(rewards, sender, ctx)
+```
+
+---
+
 ### Game Server (Node.js)
 
 **File:** `game-server/` (~200 lines total)
-**Dependencies:** `@mysten/sui`, express, dotenv, cors
+**Dependencies:** chain-compatible TS SDK, express, dotenv, cors
 **Được gọi bởi:** Frontend (HTTP)
 
 #### POST /api/sponsor
 
 ```
 PSEUDOCODE:
-  1. Extract { txBytes, senderAddress } từ request body
-  2. Verify zkLogin session:
-       nếu !isValidSession(req, senderAddress) → return 401
-  3. Check rate limit:
-       nếu rateLimitMap.get(senderAddress) >= SPONSOR_RATE_LIMIT_PER_DAY → return 429
-  4. Build sponsored transaction:
+  1. Extract bearer token + { txBytes } từ request
+  2. Verify auth session:
+       nếu bearer invalid/expired → return 401
+  3. Verify transaction policy từ bytes:
+       - sender trong tx == authenticated address
+       - gasOwner == SPONSOR_ADDRESS
+       - đúng 1 MoveCall
+       - target thuộc allowlist sponsor
+  4. Check rate limit:
+       nếu rateLimitMap.get(address) >= SPONSOR_RATE_LIMIT_PER_DAY → return 429
+  5. Build sponsored transaction:
        tx = Transaction.from(fromBase64(txBytes))
-       { bytes, signature } = await suiClient.signTransaction({
+       { bytes, signature } = await chainClient.signTransaction({
          transaction: tx,
          signer: sponsorKeypair,
        })
-  5. Increment rate limit counter:
-       rateLimitMap.set(senderAddress, current + 1)
-  6. return { sponsoredTxBytes: bytes, sponsorSig: signature }
+  6. Increment rate limit counter:
+       rateLimitMap.set(address, current + 1)
+  7. return { sponsoredTxBytes: bytes, sponsorSig: signature }
+```
+
+---
+
+#### POST /api/session/create
+
+```
+PSEUDOCODE:
+  1. Extract bearer token + { heroId, missionType }
+  2. Verify auth session → address
+  3. Check rate limit for address
+  4. Call mission::create_session(authority, address, heroId, missionType)
+  5. Transfer session object về sponsor/game_server address
+  6. return { sessionId, createTxDigest }
+```
+
+---
+
+#### POST /api/session/loot
+
+```
+PSEUDOCODE:
+  1. Extract bearer token + { sessionId }
+  2. Verify auth session → address
+  3. Check rate limit for address
+  4. Query session on-chain và verify session.player == address
+  5. Server self-submit Tx1:
+       mission::generate_loot(authority, random, session)
+  6. return { tx1Digest }
 ```
 
 ---
@@ -607,27 +697,22 @@ PSEUDOCODE:
 
 ```
 PSEUDOCODE:
-  1. Extract { sessionId, heroId, playerAddress } từ request body
-  2. Build Tx2 PTB:
+  1. Extract bearer token + { sessionId } từ request body
+  2. Query MissionSession từ chain
+  3. Verify session.player == authenticated address
+  4. Read heroId = session.hero_id
+  5. Build Tx2 PTB:
        tx = new Transaction()
-       [heroPower] = tx.moveCall({
-         target: `${PKG}::hero::total_power`,
-         arguments: [tx.object(heroId)]
-       })
-       [rewards] = tx.moveCall({
-         target: `${PKG}::mission::settle`,
-         arguments: [tx.object(sessionId), heroPower, tx.object("0x6")]
-       })
        tx.moveCall({
-         target: `${PKG}::mission::distribute`,
-         arguments: [rewards, tx.pure.address(playerAddress)]
+         target: `${PKG}::mission::settle_and_distribute`,
+         arguments: [tx.object(GAME_AUTHORITY_OBJECT_ID), tx.object(sessionId), tx.object(heroId), tx.object("0x6")]
        })
-  3. Set tx metadata:
-       tx.setSender(playerAddress)
+  6. Set tx metadata:
+       tx.setSender(authenticatedAddress)
        tx.setGasOwner(SPONSOR_ADDRESS)
-  4. Build:
-       txBytes = await tx.build({ client: suiClient })
-  5. return { txBytes: Buffer.from(txBytes).toString("base64") }
+  7. Build:
+       txBytes = await tx.build({ client: chainClient })
+  8. return { txBytes: Buffer.from(txBytes).toString("base64") }
 ```
 
 ---
@@ -641,7 +726,7 @@ PSEUDOCODE:
   3. Determine hint text:
        nếu readiness >= 70:
          hint = `Hero ready (${readiness}%). Recommend Forest Quest for rare loot drop.`
-         recommended_quest = "forest"
+         recommended_quest = "raid"
        ngược lại:
          missing = equippedSlots < 2 ? "weapon + armor" : "armor"
          hint = `Equip ${missing} first. Power ${heroPower}/50 needed.`
@@ -654,14 +739,14 @@ PSEUDOCODE:
 ### Frontend (React)
 
 **File:** `frontend/`
-**Dependencies:** `@mysten/sui`, `@mysten/sui/zklogin`
+**Dependencies:** chain-compatible TS SDK, zk proof helper library
 
-#### zkLogin: `startLogin()`
+#### Google + zk proof login: `startLogin()`
 
 ```
 PSEUDOCODE:
   1. keypair = new Ed25519Keypair()
-  2. { epoch } = await suiClient.getLatestSuiSystemState()
+  2. { epoch } = await chainClient.getLatestSystemState()
   3. randomness = generateRandomness()
   4. maxEpoch = Number(epoch) + 2
   5. nonce = generateNonce(keypair.getPublicKey(), maxEpoch, randomness)
@@ -678,7 +763,7 @@ PSEUDOCODE:
 
 ---
 
-#### zkLogin: `completeLogin(jwt)`
+#### Google + zk proof login: `completeLogin(jwt)`
 
 ```
 PSEUDOCODE:
@@ -694,7 +779,10 @@ PSEUDOCODE:
   4. Persist:
        sessionStorage.setItem("zkProof", JSON.stringify(proof))
        sessionStorage.setItem("zkAddress", address)
-  5. return { address, keypair }
+  5. POST /api/auth/complete { idToken, address, userSalt }
+       → { sessionToken, expiresAt }
+  6. Persist sessionStorage["apiSessionToken"] = sessionToken
+  7. return { address, userSalt }
 ```
 
 ---
@@ -703,7 +791,7 @@ PSEUDOCODE:
 
 ```
 PSEUDOCODE:
-  1. POST /api/sponsor { txBytes, senderAddress: zkAddress }
+  1. POST /api/sponsor { txBytes } với Authorization: Bearer <apiSessionToken>
      → { sponsoredTxBytes, sponsorSig }
   2. keypair = Ed25519Keypair.fromSecretKey(sessionStorage.getItem("zkEphemKey"))
      { signature: userSig } = await keypair.signTransaction(fromBase64(sponsoredTxBytes))
@@ -713,7 +801,7 @@ PSEUDOCODE:
        maxEpoch: Number(sessionStorage.getItem("zkMaxEpoch")),
        userSignature: userSig,
      })
-  4. return suiClient.executeTransactionBlock({
+  4. return chainClient.executeTransactionBlock({
        transactionBlock: sponsoredTxBytes,
        signature: [zkSig, sponsorSig],
        options: { showEffects: true },
@@ -726,7 +814,7 @@ PSEUDOCODE:
 
 ---
 
-### Mysten Hosted ZK Prover
+### Hosted ZK Prover
 
 **Dùng ở component:** `Frontend / auth/zklogin.ts` — hàm `completeLogin()`
 **Protocol:** HTTPS POST
@@ -745,19 +833,19 @@ Không có fallback auth method trong MVP.
 
 ---
 
-### Sui RPC (devnet)
+### OneChain RPC (testnet)
 
-**Dùng ở component:** `Game Server / sui-client.ts`, `Frontend / transactions/`
+**Dùng ở component:** `Game Server / chain client`, `Frontend / transactions/`
 **Protocol:** HTTPS (JSON-RPC)
 **Auth:** None (public endpoint)
 
 ```
-ENDPOINT   = "https://fullnode.devnet.sui.io"
+ENDPOINT   = "https://rpc-testnet.onelabs.cc:443"
 MAX_RETRIES = 3
 BACKOFF     = exponential, base 500ms, cap 5s
 TIMEOUT     = 10s per attempt
 
-// Clock Object (đặc biệt trên Sui)
+// System clock object
 CLOCK_OBJECT_ID = "0x6"   // luôn available, không cần query
 ```
 
@@ -770,9 +858,9 @@ CLOCK_OBJECT_ID = "0x6"   // luôn available, không cần query
 ### Performance (MVP targets)
 
 ```
-zkLogin flow (startLogin → address):
+Google + zk proof login flow (startLogin → address):
   Total E2E  ≤ 10s (bao gồm Google OAuth redirect + ZK proof 2-5s)
-  ZK Prover  ≤ 5s  (P90 — Mysten hosted)
+  ZK Prover  ≤ 5s  (P90 — hosted prover)
 
 Quest flow (click Start → result reveal):
   Tx1 confirm     ≤ 3s  (Mysticeti finality)
@@ -788,7 +876,7 @@ Game Server API:
 ### Security
 
 ```
-Authentication : zkLogin (ZK proof của Google OAuth — Mysten Labs audited)
+Authentication : Google OAuth + zk proof auth
 Authorization  : Owned objects — chỉ Game Server address modify MissionSession
 Data at rest   : localStorage salt (MVP trade-off — production: server-side salt)
 Data in transit: TLS (HTTPS cho tất cả API calls)
@@ -799,7 +887,7 @@ Sensitive fields KHÔNG được log: SPONSOR_PRIVATE_KEY, zkProof, jwt, zkSalt
 
 ```
 Availability target : best-effort (hackathon — không có SLA)
-Sponsor wallet      : phải có SUI trước demo, check balance trước mỗi demo rehearsal
+Sponsor wallet      : phải có native gas token trước demo, check balance trước mỗi demo rehearsal
 Backup              : demo video recording (in case live demo fail)
 ```
 
@@ -807,7 +895,7 @@ Backup              : demo video recording (in case live demo fail)
 
 ```
 Current target : demo (~10 concurrent users)
-Design ceiling : không cần re-architect cho ≤ 100 users (devnet)
+Design ceiling : không cần re-architect cho ≤ 100 users (testnet)
 Scale trigger  : > 100 users → Phase 2 (Shinami Gas Station + mainnet)
 ```
 
@@ -821,27 +909,30 @@ Scale trigger  : > 100 users → Phase 2 (Shinami Gas Station + mainnet)
 PHASE 0 — Move Foundation (Ngày 1: 09:00 - 20:00)
   [0.1] equipment.move     — vì: hero.move cần Equipment type
   [0.2] hero.move          — vì: mission.move cần Hero type (và DOF pattern)
-  [0.3] mission.move       — vì: loot.move cần add_loot từ mission
-  [0.4] loot.move          — vì: depends on mission.move public(package) add_loot
-  [0.5] sui move test      — tất cả unit tests pass trước khi publish
-  [0.6] sui client publish — copy Package ID vào .env, share với team
-  Gate: Package ID live trên devnet, tất cả tests pass
+  [0.3] mission.move       — vì: session state machine + authority + loot/settlement flow
+  [0.4] one move test      — tất cả unit tests pass trước khi publish
+  [0.5] one client publish — copy Package ID + GAME_AUTHORITY_OBJECT_ID vào .env, share với team
+  Gate: Package ID live trên testnet, tất cả tests pass
 
 PHASE 1 — Server & Auth (Ngày 2: 09:00 - 20:00, parallel streams)
-  [1.1] game-server/sui-client.ts   — depends on: [0.6] (Package ID cần)
+  [1.1] game-server/chain client    — depends on: [0.6] (Package ID cần)
   [1.2] game-server/sponsor.ts      — depends on: [1.1]
   [1.3] game-server/battle.ts       — depends on: [1.1], [0.6]
   [1.4] game-server/ai-hint.ts      — depends on: none (pure logic)
-  [1.5] game-server/index.ts        — depends on: [1.2], [1.3], [1.4]
-  [1.6] frontend/auth/zklogin.ts    — depends on: none (parallel với 1.1-1.5)
-  [1.7] frontend/transactions/gasless.ts — depends on: [1.2], [1.6]
-  Gate: Gasless mint hero hoạt động end-to-end, Google login ra Sui address đúng
+  [1.5] game-server/auth.ts         — depends on: [1.1]
+  [1.6] game-server/rate-limit.ts   — depends on: none
+  [1.7] game-server/tx-policy.ts    — depends on: [1.1], [1.2]
+  [1.8] game-server/index.ts        — depends on: [1.2], [1.3], [1.4], [1.5], [1.6], [1.7]
+  [1.9] frontend/auth/zklogin.ts    — depends on: none (parallel với 1.1-1.8)
+  [1.10] frontend/transactions/gasless.ts — depends on: [1.2], [1.9]
+  Gate: Gasless mint hero hoạt động end-to-end, Google login ra OneChain address đúng
 
 PHASE 2 — Frontend Screens (Ngày 3: 09:00 - 20:00)
-  [2.1] frontend/pages/index.tsx (Login)    — depends on: [1.6]
-  [2.2] frontend/pages/hero.tsx (Hero)      — depends on: [1.7], [2.1]
-  [2.3] frontend/pages/quest.tsx (Quest)    — depends on: [1.3], [1.7], [2.2]
-  [2.4] frontend/pages/inventory.tsx (Inv)  — depends on: [2.3]
+  [2.1] frontend/pages/index.tsx (Login)    — depends on: [1.9]
+  [2.2] frontend/pages/auth/callback.tsx    — depends on: [1.9]
+  [2.3] frontend/pages/hero.tsx (Hero)      — depends on: [1.10], [2.1]
+  [2.4] frontend/pages/quest.tsx (Quest)    — depends on: [1.3], [1.10], [2.3]
+  [2.5] frontend/pages/inventory.tsx (Inv)  — depends on: [2.4]
   Gate: Full flow từ Login → Hero → Quest → Inventory working
 
 PHASE 3 — Polish & Demo Prep (Ngày 4-5)
@@ -863,37 +954,41 @@ onerealm/
 │   └── sources/
 │       ├── equipment.move           ← created in [0.1]
 │       ├── hero.move                ← created in [0.2]
-│       ├── mission.move             ← created in [0.3]
-│       └── loot.move                ← created in [0.4]
+│       └── mission.move             ← created in [0.3]
 │
 ├── game-server/
 │   ├── package.json                 ← created in [1.1]
 │   ├── .env                         ← created in [1.1] (không commit)
-│   ├── sui-client.ts                ← created in [1.1]
+│   ├── chain.ts                     ← created in [1.1]
 │   ├── sponsor.ts                   ← created in [1.2]
 │   ├── battle.ts                    ← created in [1.3]
 │   ├── ai-hint.ts                   ← created in [1.4]
-│   └── index.ts                     ← created in [1.5]
+│   ├── auth.ts                      ← created in [1.5]
+│   ├── rate-limit.ts                ← created in [1.6]
+│   ├── tx-policy.ts                 ← created in [1.7]
+│   └── index.ts                     ← created in [1.8]
 │
 └── frontend/
     ├── package.json                 ← created in [1.6]
     ├── .env.local                   ← created in [1.6] (không commit)
     ├── auth/
-    │   └── zklogin.ts               ← created in [1.6]
+    │   └── zklogin.ts               ← created in [1.9]
     ├── transactions/
-    │   └── gasless.ts               ← created in [1.7]
+    │   └── gasless.ts               ← created in [1.10]
     └── pages/
         ├── index.tsx                ← created in [2.1]
-        ├── hero.tsx                 ← created in [2.2]
-        ├── quest.tsx                ← created in [2.3]
-        └── inventory.tsx            ← created in [2.4]
+        ├── auth/callback.tsx        ← created in [2.2]
+        ├── hero.tsx                 ← created in [2.3]
+        ├── quest.tsx                ← created in [2.4]
+        └── inventory.tsx            ← created in [2.5]
 ```
 
 **Environment variables required (xem CONTRACTS.md Section 6):**
 
 ```
 contracts/.env          → ONEREALM_PACKAGE_ID, GAME_SERVER_ADDRESS
-game-server/.env        → SPONSOR_PRIVATE_KEY, SPONSOR_ADDRESS, ONEREALM_PACKAGE_ID, SUI_RPC_URL
+game-server/.env        → SPONSOR_PRIVATE_KEY, SPONSOR_ADDRESS, ONEREALM_PACKAGE_ID, CHAIN_RPC_URL,
+                          GAME_AUTHORITY_OBJECT_ID, GOOGLE_CLIENT_ID, ALLOWED_ORIGINS, AUTH_SESSION_TTL_HOURS
 frontend/.env.local     → NEXT_PUBLIC_GOOGLE_CLIENT_ID, NEXT_PUBLIC_ONEREALM_PACKAGE_ID,
-                          NEXT_PUBLIC_GAME_SERVER_URL, NEXT_PUBLIC_SUI_NETWORK
+                          NEXT_PUBLIC_GAME_SERVER_URL, NEXT_PUBLIC_CHAIN_NETWORK, NEXT_PUBLIC_SPONSOR_ADDRESS
 ```
