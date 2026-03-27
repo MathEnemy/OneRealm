@@ -35,6 +35,11 @@ export async function buildBattleTx(
   
   const sessionStatus = Number(fields.status ?? -1);
 
+  const STATUS_LOOT_DONE = 1;
+  if (sessionStatus !== STATUS_LOOT_DONE) {
+    throw Object.assign(new Error("Session status is not ready for settlement"), { status: 400 });
+  }
+
   const tx = new Transaction();
 
   tx.moveCall({

@@ -154,7 +154,7 @@ module onerealm::mission {
         affix:     u8
     ) {
         assert!(
-            session.status == STATUS_PENDING || session.status == STATUS_LOOT_DONE,
+            session.status == STATUS_PENDING,
             EInvalidStatus
         );
         session.loot_tiers.push_back(tier);
