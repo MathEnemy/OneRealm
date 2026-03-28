@@ -15,6 +15,10 @@ export function verifySponsoredTransaction(txBytes: string, expectedSender: stri
     throw { status: 400, error: 'Transaction payload must be a string' };
   }
 
+  if (txBytes.length > 3000) {
+    throw { status: 400, error: 'Transaction payload too large' };
+  }
+
   let txData;
   try {
     txData = fromBase64(txBytes);
@@ -33,6 +37,11 @@ export function verifySponsoredTransaction(txBytes: string, expectedSender: stri
 
   if (normalizeSuiAddress(data.gasData.owner ?? '') !== normalizeSuiAddress(SPONSOR_ADDRESS)) {
     throw { status: 401, error: 'Gas owner mismatch' };
+  }
+
+  const budget = Number(data.gasData.budget ?? 0);
+  if (budget > 50_000_000) {
+    throw { status: 400, error: 'Gas budget too high' };
   }
 
   if (data.commands.length !== 1) {

@@ -82,6 +82,11 @@ export async function buildBattleTx(
     throw Object.assign(new Error("Session status is not ready for settlement"), { status: 400 });
   }
 
+  const readyAtMs = Number(fields.ready_at_ms ?? 0);
+  if (Date.now() < readyAtMs) {
+    throw Object.assign(new Error("Session is not ready for settlement yet (still in progress)"), { status: 400 });
+  }
+
   const tx = new Transaction();
 
   const settlementMode = await withRpcRetry('battle:getSettlementMode', () => getSettlementMode());

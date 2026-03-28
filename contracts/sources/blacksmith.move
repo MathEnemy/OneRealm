@@ -68,7 +68,7 @@ module onerealm::blacksmith {
         } else if (recipe == RECIPE_MINERS_CROWNBREAKER) {
             assert!(onerealm::hero::profession(hero) == onerealm::hero::profession_mining(), EProfessionMismatch);
             assert!(onerealm::hero::profession_rank(hero) >= onerealm::hero::profession_rank_master(), EProfessionRankTooLow);
-            assert!(ore_count == 2 && essence_count == 1 && scrap_count == 0, EWrongMaterials);
+            assert!(ore_count == 3 && essence_count == 0 && scrap_count == 0, EWrongMaterials);
             (onerealm::equipment::type_weapon(), b"Miner's Crownbreaker", onerealm::equipment::affix_raider(), 10, 3)
         } else if (recipe == RECIPE_FORAGERS_BULWARK) {
             assert!(onerealm::hero::profession(hero) == onerealm::hero::profession_foraging(), EProfessionMismatch);
